@@ -8,4 +8,3 @@ rust-version = "1.85"
 
 [dependencies]
 rayon = "1.10"
-num-traits = "0.2"
