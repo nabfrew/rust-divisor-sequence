@@ -1,0 +1,11 @@
+m, repeat_after, max_value, most_common_tail_value, cycle_length, cycle_max, cycle_min, distinct_tail_values, steps_to_lock_in
+1, 2, 1, 1, 1, 1, 1, 1, None
+2, 9, 5, 5, 3, 5, 4, 2, None
+3, 24, 14, 14, 4, 14, 12, 2, None
+4, 23, 19, 15, 6, 17, 14, 4, None
+5, 35, 19, 15, 7, 19, 14, 5, None
+6, 32, 34, 32, 7, 34, 30, 3, None
+7, 75, 43, 19, 9, 19, 14, 4, None
+8, 114, 43, 41, 38, 43, 22, 12, None
+9, 81, 43, 41, 12, 43, 24, 8, None
+10, 241, 82, 70, 185, 82, 66, 8, None
