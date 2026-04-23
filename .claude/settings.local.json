@@ -9,7 +9,8 @@
       "Bash(rustup default *)",
       "Bash(cargo update *)",
       "Bash(wait)",
-      "Bash(rustup toolchain *)"
+      "Bash(rustup toolchain *)",
+      "Bash(cargo run *)"
     ]
   }
 }

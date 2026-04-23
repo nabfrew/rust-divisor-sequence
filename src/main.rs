@@ -2,7 +2,7 @@ use std::{cmp::min, fs::File, io::Write, sync::Arc, time::Instant};
 
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use divisor_series::{build_fac_table, r, RResult};
+use divisor_series::{RResult, build_fac_table, r};
 
 fn main() {
     // Set the maximum sequence length before giving up.
@@ -23,7 +23,10 @@ fn main() {
 
     let program_start = Instant::now();
 
-    let fac_table = Arc::new(build_fac_table(32768));
+    // Sized for div_sum up to 2^18 = 262144. max_value/m ≲ 14 in observed data (m=577:
+    // 7808/577 ≈ 13.5), so this clears m ≤ ~18_000 with a wide safety margin; r() panics
+    // with a clear message if a future run outgrows it.
+    let fac_table = Arc::new(build_fac_table(1 << 18));
 
     let mut start_val = *trials.start();
     while start_val <= *trials.end() {
@@ -32,29 +35,19 @@ fn main() {
         println!("\nStarting batch: {:?}", batch);
 
         let batch_start = Instant::now();
-        let results: Vec<(usize, RResult<u16>)> = batch
+        let results: Vec<(usize, RResult)> = batch
             .into_par_iter()
             .map(|m| (m, r(m, max_length, fac_table.clone())))
             .collect();
         for (m, result) in &results {
             let mut w = Vec::new();
-            if let Some(_rep_seq) = &result.repeated {
-                let max_val = result.sequence.iter().max().unwrap();
+            if let Some(rep_after) = result.repeat_after {
                 println!(
                     "R(n,{}): Repeated @ n={}. Max val: {}.",
-                    m,
-                    result.repeated_at.unwrap(),
-                    max_val
+                    m, rep_after, result.max_value
                 );
 
-                write!(
-                    w,
-                    "{}, {}, {}\n",
-                    m,
-                    result.repeated_at.unwrap(),
-                    max_val
-                )
-                .unwrap();
+                write!(w, "{}, {}, {}\n", m, rep_after, result.max_value).unwrap();
             } else {
                 println!("R(n,{})", m);
                 println!("!!!!  No repeat for n<{}", max_length);
