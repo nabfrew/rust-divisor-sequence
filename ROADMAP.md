@@ -50,6 +50,7 @@ This single observation replaces both `gs_find` (O(seq_len) each check) and `bin
    Pick (b) for simplicity in this focused pass; (a) is a follow-up if m-range grows further.
 
 5. **CLI via `clap`.** `--m-range START..=END`, `--max-steps N`, `--output PATH`, `--threads N`, `--fac-table-size N`. Replace the hardcoded `results_500.csv`, `1..=2000`, batch size, etc.
+   - include a way to read results.csv and revisit the entries that maxed out the max_length and have value 'None, None' with higher max.
 
 6. **Unit tests.** For m ∈ {1, 2, 3, 5, 8}, run both the new Brent-based `r()` and a stored-sequence reference (kept in `tests/` only) and assert `repeat_after`, `max_value`, cycle length, and first 1000 terms agree. Cross-check the numbers in `results.csv` / `compiled_results.csv` for small m.
 
@@ -57,7 +58,7 @@ This single observation replaces both `gs_find` (O(seq_len) each check) and `bin
 
 ## Phase B — Math output (weekend 2)
 
-1. **Extend the result record.** `RResult` gains `cycle_length`, `cycle_max`, `cycle_min`, `most_common_tail_value`, `distinct_tail_values`. CSV header updated to match `compiled_results.csv` plus the new columns. This reproduces and supersedes the existing compiled CSV from a single run.
+1. **Extend the result record.** `RResult` gains `cycle_length`, `cycle_max`, `cycle_min`, `most_common_tail_value`, `distinct_tail_values`, `full_cycle_sequence`. CSV header updated to match `compiled_results.csv` plus the new columns. This reproduces and supersedes the existing compiled CSV from a single run.
 
 2. **Extended data run.** With the rewrite, re-run m = 1..=2000 (or further — determined by real runtime after the rewrite lands). Resolve the m=569 `None, None` gap. Save under `data/` with the run parameters recorded in a sidecar `.toml`.
 
