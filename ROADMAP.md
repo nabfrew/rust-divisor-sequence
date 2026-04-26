@@ -33,40 +33,137 @@ This single observation replaces both `gs_find` (O(seq_len) each check) and `bin
 - `NOTES.md` (new) — running research log: conjectures, plots, OEIS IDs if found.
 
 
-# Phase B — Math output (weekend 2)
+# Phase B — Math output
 
-2. **Extended data run.** With the rewrite, re-run m = 1..=2000 (or further — determined by real runtime after the rewrite lands). Resolve the m=569 `None, None` gap. Save under `data/` with the run parameters recorded in a sidecar `.toml`.
+Phase A landed: `results_new.csv` covers m=1..=1158 with no `None` rows in the
+8-column format (`m, repeat_after, max_value, most_common_tail_value,
+cycle_length, cycle_max, cycle_min, distinct_tail_values`). The original m=569
+wall is gone and the four extra cycle-summary columns surface structure the
+original Phase B plotting list ignored. Plan refocuses on that structure.
 
-3. **`analysis/explore.ipynb`.** Load CSV, plot:
-   - repeat_after(m), log-log with a fit.
-   - max_value(m), plus max_value / m.
-   - cycle_length(m).
-   - Histogram of most-common-tail values.
-   Goal: eyeball growth law candidates (polynomial? sub-exponential?), flag outliers.
+## 1. Extended data run
 
-4. **OEIS artifacts.** Generate b-files for each derived sequence in `analysis/oeis_bfiles/` (plain `n value\n` per line, standard OEIS format). Run local OEIS search (paste first 20 terms into oeis.org manually — no network automation). Record hits / misses in `NOTES.md`. If any are new, draft a submission.
+Push m past 1158. Calibrate `--max-steps` for the outlier class — observed
+`repeat_after` already reaches ~2×10¹⁰ in current data, so allocate ~10¹¹
+and lean on `--checkpoint-dir` for the long tail. Run parameters recorded in
+a sidecar `.toml` next to the CSV.
 
-5. **`NOTES.md` research log.** One-page-ish: problem statement, state-space framing, guaranteed-periodicity argument (finite state space), empirical growth-rate conjectures with the plots that support them, open questions (e.g., basin-of-attraction under non-uniform seeds — flagged as follow-up, explicitly out of scope here).
+## 2. Attractor catalog (headline)
+
+Many m share a cycle whose value-multiset is essentially identical:
+e.g. `cycle_min/cycle_max = 4402/4442` covers nine m's just in 559–593,
+`2624/2638` covers a much larger cluster, `4602/4612`, `4736/4744`,
+`5130/5158`, `6210/6238`, `9394/9406` are recurring signatures. Cluster m by
+`(cycle_min, cycle_max, distinct_tail_values)` and confirm "shared signature"
+means "same value-multiset" by inspecting one representative m per cluster.
+
+**Persistence shape:** cycles can hit 10⁷+ ordered terms — do **not**
+materialise the period. Persist only the value→count multiset, which is
+bounded by `distinct_tail_values` (worst observed ≈ 7.4k for the m=741
+cluster, ~80 KB max per dump; typical attractor is 3–5 values, ~100 B).
+`summarize_cycle` already builds this HashMap and discards it; expose it.
+
+Concrete deliverables:
+
+- New `dump-signature --m N --output PATH` CLI subcommand: re-runs `r()`
+  for one m and writes `value,count` per line. Multiset only; never the
+  ordered period.
+- `analysis/attractors.csv`: one row per cluster — `signature_id,
+  distinct_count, cycle_min, cycle_max, signature_hash, representative_m,
+  member_m_list`.
+- `analysis/cycle_signatures/<m>.csv`: one file per cluster representative
+  (and per outlier from §4). Don't dump for every m — redundant for the
+  cluster majority.
+
+## 3. `analysis/explore.ipynb`
+
+Load `results_new.csv`, plot:
+
+- `repeat_after(m)`, log-log with a fit.
+- `max_value(m)`, plus `max_value / m`.
+- `cycle_length(m)`, with the `cycle_length = m+1` cluster (~554 of 1158
+  rows in current data) called out vs. the multi-m cycles.
+- `cycle_min(m)`, `cycle_max(m)` overlaid with `m·ln(m)` and the trivial
+  lower bound `m`. Empirical band width as a function of m.
+- `(cycle_max - cycle_min)(m)` and `distinct_tail_values(m)` — both flag
+  the ~10 outlier m's (532, 534, 601, 630, 738–751-region, 1082).
+- Scatter of m coloured by attractor cluster id from §2.
+
+## 4. Outlier characterisation
+
+For m where `cycle_max - cycle_min ≫ 100` or `distinct_tail_values ≫ 50`
+(~10 m's in current data), examine the prime-factor structure of the
+integers entering/leaving the window of length m around those values.
+Hypothesis from `human_notes.md`: confluence of highly-composite numbers
+sliding through the window broadens the attractor. Confirm or refute by
+correlating outlier m's with τ-spikes among nearby integers.
+
+## 5. Linear-segment detector
+
+Slide an OLS over `cycle_min(m)` and flag runs of length ≥ K with R² ≥ 0.99
+and slope in a small rational set. Per `human_notes.md` these typically
+lead into a stable attractor and have wider `cycle_max - cycle_min` spread
+than the attractor itself. Output `(m_start, m_end, slope, target_cluster)`
+to `NOTES.md`.
+
+## 6. m·ln(m) bound
+
+Quantify the empirical band: median, p5/p95 of `cycle_min`, `cycle_max`,
+`max_value` relative to `m·ln(m)` and `m·H(m)` (Hardy-Ramanujan). Try to
+beat the trivial all-primes lower bound `≥ m`. If the band tightens with
+growing m, record the conjectured bound in `NOTES.md`.
+
+## 7. OEIS artifacts
+
+b-files in `analysis/oeis_bfiles/` for: `repeat_after(m)`, `max_value(m)`,
+`cycle_max(m)`, `cycle_min(m)`, `distinct_tail_values(m)`,
+`(cycle_max - cycle_min)(m)`. Skip `cycle_length(m)` for the
+`cycle_length = m+1` majority — uninteresting; submit only the non-trivial
+subseries (m where `cycle_length ≠ m+1`). Also search the recurring
+attractor extremes as a stand-alone sequence (2638, 4442, 4612, 4744,
+5158, 6238, 9406, …) — these are the `cycle_max` constants of §2's
+clusters and are good OEIS candidates in their own right. Hits / misses
+logged in `NOTES.md`. Manual paste into oeis.org — no network automation.
+
+## 8. `NOTES.md` research log
+
+Lead with the attractor catalog. Sections: problem statement, finite-state-
+space periodicity argument, attractor catalog summary, m·ln(m) bound
+conjecture with plots, outlier list (§4) with notes, linear-segment list
+(§5), OEIS hits / misses, open questions (non-uniform seeds, generalised
+arithmetic functions — explicitly out of scope here).
 
 ## What is explicitly out of scope
 
-- Generalizing to other arithmetic functions (σ, φ, ω, Ω, λ). Deferred per user instruction.
-- GPU / SIMD. Revisit only if Brent-based detection is still the bottleneck after the rewrite.
-- Non-uniform seeds, basin-of-attraction maps, dynamical-systems theory beyond the minimum needed to justify the perf rewrite.
-- Publishing the crate, WASM demo, CI. These are software-quality goals outside this pass.
+- Generalizing to other arithmetic functions (σ, φ, ω, Ω, λ).
+- GPU / SIMD. Revisit only if detection is the bottleneck again after Phase B.
+- Non-uniform seeds, basin-of-attraction maps.
+- Materialising full ordered cycle periods to disk (memory blowup at large m).
+- Publishing the crate, WASM demo, CI.
 
 ## Verification
 
-- `cargo test` — unit tests vs. reference implementation for small m pass; cross-checks against existing CSV rows (m ≤ 50) match exactly.
-- `cargo bench` — Brent implementation beats a rebuilt-from-scratch `gs_find` baseline on m ∈ {64, 256} by at least a factor of 5 (conservative; expect more).
-- **End-to-end:** `cargo run --release -- --m-range 560..=580 --max-steps 2_000_000_000` — m=569 resolves (no `None`), and max-value / repeat-after values for m ∈ {560..568, 570..580} reproduce the existing CSV.
-- `jupyter nbconvert --execute analysis/explore.ipynb` runs clean on the extended CSV and produces the plots.
-- `analysis/oeis_bfiles/*.txt` lint clean (one `n value` per line, strictly increasing n, no gaps). First 20 terms match CSV.
+- `cargo test --release` and `cargo bench --bench r` — pass per CLAUDE.md.
+- m=560..=572 spot diff against `results_new.csv` per CLAUDE.md (covers
+  the historically tricky m=569).
+- `jupyter nbconvert --execute analysis/explore.ipynb` runs clean on
+  `results_new.csv` and produces every plot in §3.
+- `dump-signature --m N` is deterministic: two runs on the same m produce
+  byte-identical output.
+- Attractor clustering: every member of a cluster shares the
+  representative's `signature_hash`. Clusters of size ≥ 2 verified by
+  comparing the dumped multisets pairwise.
+- `analysis/oeis_bfiles/*.txt` lint clean (one `n value` per line,
+  strictly increasing n, no gaps); first 20 terms match
+  `results_new.csv`.
 
-## Critical-path files when execution starts
+## Critical-path files
 
-- `src/main.rs:1-193` — currently monolithic; gets split.
-- `src/main.rs:9-20` (`repeats_m`) and `src/main.rs:107-127` (`binary_repeat_search`) — both deleted, replaced by Brent detector in `lib.rs`.
-- `src/main.rs:23-39` (`build_fac_table`) — replaced with SPF sieve.
-- `src/main.rs:52-104` (`r`) — replaced with window-state iterator using the Brent detector; `Vec<u16>` sequence storage removed.
-- `Cargo.toml:8-12` — drop `galil-seiferas`, `prime-factor`; add `clap`, dev-dep `criterion`.
+- `src/lib.rs::summarize_cycle` (lib.rs:549) — already builds the
+  value→count `HashMap`; needs an entry point that returns the map (not
+  just `CycleStats`) so the CLI can persist it.
+- `src/main.rs` — add `dump-signature` subcommand alongside `scan` /
+  `revisit`.
+- `analysis/explore.ipynb`, `analysis/attractors.csv`,
+  `analysis/cycle_signatures/`, `analysis/oeis_bfiles/`, `NOTES.md` —
+  all new.
