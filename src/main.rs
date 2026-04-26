@@ -11,7 +11,9 @@ use std::{
 use clap::{Parser, Subcommand};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 
-use divisor_series::{RResult, build_fac_table, r};
+use divisor_series::{
+    Progress, ProgressPhase, RResult, build_fac_table, r_resumable, r_with_progress,
+};
 
 /// Explore the divisor-sum sequence R(n, m) over ranges of m.
 #[derive(Parser, Debug)]
@@ -36,13 +38,32 @@ struct Cli {
     #[arg(long, default_value_t = 8, global = true)]
     batch_size: usize,
 
+    /// Print a heartbeat every N steps within each in-flight trial.
+    /// 0 disables heartbeats. Default 100M ≈ 1 line/sec at large m.
+    #[arg(long, default_value_t = 100_000_000, global = true)]
+    progress_interval: usize,
+
+    /// Directory in which to write per-trial checkpoint files (one per m).
+    /// If unset, no checkpoints are written and crash-resume is disabled.
+    /// If set, the directory is created if missing; each trial writes
+    /// `m{m}.ckpt` and resumes from it on restart. The file is deleted on
+    /// successful completion and preserved on timeout.
+    #[arg(long, global = true)]
+    checkpoint_dir: Option<PathBuf>,
+
+    /// Save a checkpoint every N steps within each in-flight trial. 0
+    /// disables saves (existing checkpoints are still loaded). Default
+    /// 1B steps ≈ once every 10 s at large m.
+    #[arg(long, default_value_t = 1_000_000_000, global = true)]
+    checkpoint_interval: usize,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Scan a range of m and write a CSV of (m, repeat_after, max_value).
+    /// Scan a range of m and write a CSV with per-m result + cycle statistics.
     Scan {
         /// Range of m, inclusive on both ends, e.g. `1..=2000` or `1..2001`.
         #[arg(long, value_parser = parse_range, default_value = "1..=2000")]
@@ -53,9 +74,9 @@ enum Command {
         output: PathBuf,
     },
     /// Re-run rows whose repeat_after is 'None' with the current --max-steps
-    /// and write a refreshed CSV.
+    /// and write a refreshed CSV in the new format.
     Revisit {
-        /// Existing CSV produced by a previous run.
+        /// Existing CSV produced by a previous run. Old 3-column CSVs are accepted.
         #[arg(long)]
         input: PathBuf,
 
@@ -104,12 +125,21 @@ fn main() {
     let fac_table = Arc::new(build_fac_table(cli.fac_table_size));
     let program_start = Instant::now();
 
+    if let Some(dir) = cli.checkpoint_dir.as_deref()
+        && !dir.exists()
+    {
+        std::fs::create_dir_all(dir).expect("failed to create checkpoint directory");
+    }
+
     match cli.command {
         Command::Scan { m_range, output } => {
             run_scan(
                 m_range.0..=m_range.1,
                 cli.max_steps,
                 cli.batch_size,
+                cli.progress_interval,
+                cli.checkpoint_dir.as_deref(),
+                cli.checkpoint_interval,
                 &output,
                 fac_table,
             );
@@ -120,6 +150,9 @@ fn main() {
                 &output,
                 cli.max_steps,
                 cli.batch_size,
+                cli.progress_interval,
+                cli.checkpoint_dir.as_deref(),
+                cli.checkpoint_interval,
                 fac_table,
             );
         }
@@ -131,22 +164,35 @@ fn main() {
     );
 }
 
+// CSV header for the new result format. All scalar columns — the full cycle sequence is
+// not stored (some m produce periods of 10^7+ terms; see lib.rs::summarize_cycle).
+const CSV_HEADER: &str = "m, repeat_after, max_value, most_common_tail_value, cycle_length, cycle_max, cycle_min, distinct_tail_values";
+
 fn run_scan(
     trials: std::ops::RangeInclusive<usize>,
     max_length: usize,
     batch_size: usize,
+    progress_interval: usize,
+    checkpoint_dir: Option<&Path>,
+    checkpoint_interval: usize,
     output: &Path,
     fac_table: Arc<Vec<u8>>,
 ) {
     let mut file = File::create(output).expect("failed to open output CSV");
-    writeln!(file, "m, repeat_after, max_value").unwrap();
+    writeln!(file, "{}", CSV_HEADER).unwrap();
 
     run_batches(
         trials.clone().collect(),
         max_length,
         batch_size,
+        progress_interval,
+        checkpoint_dir,
+        checkpoint_interval,
         fac_table,
-        |m, result| write_row(&mut file, m, result),
+        |m, result| {
+            write_result_row(&mut file, m, &result);
+            file.flush().unwrap();
+        },
     );
     file.flush().unwrap();
 }
@@ -156,21 +202,21 @@ fn run_revisit(
     output: &Path,
     max_length: usize,
     batch_size: usize,
+    progress_interval: usize,
+    checkpoint_dir: Option<&Path>,
+    checkpoint_interval: usize,
     fac_table: Arc<Vec<u8>>,
 ) {
     let rows = read_csv(input);
     let none_ms: Vec<usize> = rows
         .iter()
-        .filter_map(|row| match row {
-            Row::None { m } => Some(*m),
-            Row::Done { .. } => None,
-        })
+        .filter(|row| row.repeat_after.is_none())
+        .map(|row| row.m)
         .collect();
 
     if none_ms.is_empty() {
         println!("No 'None' rows in {}; nothing to revisit.", input.display());
-        // Still produce an output CSV so downstream tooling has a predictable file.
-        write_csv(output, &rows, &Default::default());
+        write_csv(output, &rows, &std::collections::HashMap::new());
         return;
     }
 
@@ -187,6 +233,9 @@ fn run_revisit(
         none_ms.clone(),
         max_length,
         batch_size,
+        progress_interval,
+        checkpoint_dir,
+        checkpoint_interval,
         fac_table,
         |m, result| {
             resolved.insert(m, result);
@@ -196,60 +245,113 @@ fn run_revisit(
     write_csv(output, &rows, &resolved);
 }
 
-enum Row {
-    Done {
-        m: usize,
-        repeat_after: usize,
-        max_value: u16,
-    },
-    None {
-        m: usize,
-    },
+// One CSV row in the new format. Fields loaded from an old 3-column CSV keep the new
+// fields as None.
+#[derive(Default)]
+struct Row {
+    m: usize,
+    repeat_after: Option<usize>,
+    max_value: Option<u16>,
+    most_common_tail_value: Option<u16>,
+    cycle_length: Option<usize>,
+    cycle_max: Option<u16>,
+    cycle_min: Option<u16>,
+    distinct_tail_values: Option<usize>,
 }
 
+impl Row {
+    fn from_result(m: usize, r: &RResult) -> Self {
+        let repeat_after = r.repeat_after;
+        // Preserve the old CSV convention: if the run timed out, max_value is reported
+        // as None too (written as "None" in the CSV).
+        let max_value = repeat_after.map(|_| r.max_value);
+        Row {
+            m,
+            repeat_after,
+            max_value,
+            most_common_tail_value: r.most_common_tail_value,
+            cycle_length: r.cycle_length,
+            cycle_max: r.cycle_max,
+            cycle_min: r.cycle_min,
+            distinct_tail_values: r.distinct_tail_values,
+        }
+    }
+}
+
+// Parses the input CSV, accepting both the legacy 3-column format
+// (`m, repeat_after, max_value`) and the new 8-column format.
 fn read_csv(path: &Path) -> Vec<Row> {
     let file = File::open(path).unwrap_or_else(|e| panic!("open {}: {}", path.display(), e));
     let reader = BufReader::new(file);
     let mut rows = Vec::new();
     let mut seen_m: HashSet<usize> = HashSet::new();
+    let mut header_cols: Option<usize> = None;
+
     for (lineno, line) in reader.lines().enumerate() {
         let line = line.expect("read line");
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        if lineno == 0 && trimmed.starts_with("m") {
+        let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+
+        if lineno == 0 && parts.first().map(|p| p.eq_ignore_ascii_case("m")) == Some(true) {
+            header_cols = Some(parts.len());
             continue;
         }
-        let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
-        if parts.len() != 3 {
-            panic!("malformed row {}: {:?}", lineno + 1, line);
+
+        let cols = header_cols.unwrap_or(parts.len());
+        if parts.len() != cols {
+            panic!(
+                "line {}: expected {} columns, got {}: {:?}",
+                lineno + 1,
+                cols,
+                parts.len(),
+                line
+            );
         }
+
         let m: usize = parts[0]
             .parse()
             .unwrap_or_else(|_| panic!("bad m on line {}: {:?}", lineno + 1, parts[0]));
         if !seen_m.insert(m) {
             panic!("duplicate m={} in {}", m, path.display());
         }
-        let row = if parts[1].eq_ignore_ascii_case("None") || parts[2].eq_ignore_ascii_case("None")
-        {
-            Row::None { m }
-        } else {
-            let repeat_after: usize = parts[1].parse().unwrap_or_else(|_| {
-                panic!("bad repeat_after on line {}: {:?}", lineno + 1, parts[1])
-            });
-            let max_value: u16 = parts[2].parse().unwrap_or_else(|_| {
-                panic!("bad max_value on line {}: {:?}", lineno + 1, parts[2])
-            });
-            Row::Done {
-                m,
-                repeat_after,
-                max_value,
-            }
+
+        let mut row = Row {
+            m,
+            ..Row::default()
         };
+        row.repeat_after = parse_opt(parts[1]);
+        row.max_value = parse_opt(parts[2]);
+        if cols >= 8 {
+            row.most_common_tail_value = parse_opt(parts[3]);
+            row.cycle_length = parse_opt(parts[4]);
+            row.cycle_max = parse_opt(parts[5]);
+            row.cycle_min = parse_opt(parts[6]);
+            row.distinct_tail_values = parse_opt(parts[7]);
+        } else if cols != 3 {
+            panic!(
+                "unsupported CSV column count {} in {} (expected 3 or 8)",
+                cols,
+                path.display()
+            );
+        }
         rows.push(row);
     }
     rows
+}
+
+fn parse_opt<T: std::str::FromStr>(s: &str) -> Option<T> {
+    let s = s.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(
+            s.parse()
+                .unwrap_or_else(|_| panic!("parse error on {:?}", s)),
+        )
+    }
 }
 
 fn write_csv(
@@ -258,27 +360,11 @@ fn write_csv(
     resolved: &std::collections::HashMap<usize, RResult>,
 ) {
     let mut file = File::create(path).expect("failed to open output CSV");
-    writeln!(file, "m, repeat_after, max_value").unwrap();
+    writeln!(file, "{}", CSV_HEADER).unwrap();
     for row in rows {
-        match row {
-            Row::Done {
-                m,
-                repeat_after,
-                max_value,
-            } => {
-                writeln!(file, "{}, {}, {}", m, repeat_after, max_value).unwrap();
-            }
-            Row::None { m } => match resolved.get(m) {
-                Some(RResult {
-                    repeat_after: Some(rep_after),
-                    max_value,
-                }) => {
-                    writeln!(file, "{}, {}, {}", m, rep_after, max_value).unwrap();
-                }
-                _ => {
-                    writeln!(file, "{}, None, None", m).unwrap();
-                }
-            },
+        match resolved.get(&row.m) {
+            Some(r) => write_row(&mut file, &Row::from_result(row.m, r)),
+            None => write_row(&mut file, row),
         }
     }
     file.flush().unwrap();
@@ -288,6 +374,9 @@ fn run_batches<F>(
     trials: Vec<usize>,
     max_length: usize,
     batch_size: usize,
+    progress_interval: usize,
+    checkpoint_dir: Option<&Path>,
+    checkpoint_interval: usize,
     fac_table: Arc<Vec<u8>>,
     mut on_result: F,
 ) where
@@ -307,13 +396,51 @@ fn run_batches<F>(
         let results: Vec<(usize, RResult)> = batch
             .to_vec()
             .into_par_iter()
-            .map(|m| (m, r(m, max_length, fac_table.clone())))
+            .map(|m| {
+                let progress_cb = |p: Progress| {
+                    let phase = match p.phase {
+                        ProgressPhase::Brent => "brent",
+                        ProgressPhase::FindMu => "mu   ",
+                    };
+                    let pct = (p.step as f64 / max_length as f64) * 100.0;
+                    println!(
+                        "[m={:>4} {}] step {:>14} ({:>5.1}% of cap), max_value={}",
+                        m, phase, p.step, pct, p.max_value,
+                    );
+                };
+                let result = match checkpoint_dir {
+                    Some(dir) => {
+                        let path = dir.join(format!("m{}.ckpt", m));
+                        r_resumable(
+                            m,
+                            max_length,
+                            fac_table.clone(),
+                            progress_interval,
+                            progress_cb,
+                            &path,
+                            checkpoint_interval,
+                        )
+                        .unwrap_or_else(|e| panic!("checkpoint error for m={}: {}", m, e))
+                    }
+                    None => r_with_progress(
+                        m,
+                        max_length,
+                        fac_table.clone(),
+                        progress_interval,
+                        progress_cb,
+                    ),
+                };
+                (m, result)
+            })
             .collect();
         for (m, result) in results {
             if let Some(rep_after) = result.repeat_after {
                 println!(
-                    "R(n,{}): Repeated @ n={}. Max val: {}.",
-                    m, rep_after, result.max_value
+                    "R(n,{}): Repeated @ n={}. Max val: {}. Cycle len: {}.",
+                    m,
+                    rep_after,
+                    result.max_value,
+                    result.cycle_length.unwrap_or(0),
                 );
             } else {
                 println!("R(n,{})", m);
@@ -328,11 +455,26 @@ fn run_batches<F>(
     }
 }
 
-fn write_row(file: &mut File, m: usize, result: RResult) {
-    if let Some(rep_after) = result.repeat_after {
-        writeln!(file, "{}, {}, {}", m, rep_after, result.max_value).unwrap();
-    } else {
-        writeln!(file, "{}, None, None", m).unwrap();
+fn write_result_row(file: &mut File, m: usize, result: &RResult) {
+    let row = Row::from_result(m, result);
+    write_row(file, &row);
+}
+
+fn write_row(file: &mut File, row: &Row) {
+    write!(file, "{}", row.m).unwrap();
+    write_opt(file, &row.repeat_after);
+    write_opt(file, &row.max_value);
+    write_opt(file, &row.most_common_tail_value);
+    write_opt(file, &row.cycle_length);
+    write_opt(file, &row.cycle_max);
+    write_opt(file, &row.cycle_min);
+    write_opt(file, &row.distinct_tail_values);
+    writeln!(file).unwrap();
+}
+
+fn write_opt<T: std::fmt::Display>(file: &mut File, v: &Option<T>) {
+    match v {
+        Some(x) => write!(file, ", {}", x).unwrap(),
+        None => write!(file, ", None").unwrap(),
     }
-    file.flush().unwrap();
 }
