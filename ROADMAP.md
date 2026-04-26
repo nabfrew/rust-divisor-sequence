@@ -32,33 +32,8 @@ This single observation replaces both `gs_find` (O(seq_len) each check) and `bin
 - `analysis/oeis_bfiles/` (new) — generated b-files per derived sequence, ready for OEIS submission.
 - `NOTES.md` (new) — running research log: conjectures, plots, OEIS IDs if found.
 
-## Phase A — Performance rewrite (weekend 1)
 
-1. **Split lib/bin.** Move `r`, `RResult`, `build_fac_table`, and new cycle detector to `lib.rs`. Keep `main.rs` as CLI only. This unlocks unit tests and benches.
-
-2. **Replace `gs_find` + full-sequence storage with Brent's cycle detection on window states.**
-   - State = ring-buffer `[u16; m]` + running sum (sum is redundant but cheap). Only the window is compared.
-   - Brent: snapshot the tortoise at power-of-two steps; at each subsequent step, compare current window to snapshot. On match, period = steps since snapshot.
-   - Recover `repeat_after` with a second pass: advance two pointers in lock-step, one starting at window at-snapshot-time, the other at step 0 reconstructed from the initial m ones; they meet at `repeat_after`. Since the window at time t is fully determined by `(fac_table, previous window)`, the reconstruction is straightforward.
-   - Replaces the entire `seq: Vec<u16>` allocation. Memory per trial drops from O(repeat_after) to O(m).
-
-3. **Linear smallest-prime-factor sieve for `fac_table`.** Replace the `PrimeFactors::from` per-number call with a single O(N log log N) sieve of SPF, then derive divisor counts in one pass using the standard `τ(p^a · k) = τ(k) · (a+1)/a` recurrence (or the SPF-groups method). Drop the `prime-factor` dependency.
-
-4. **Make fac_table size dynamic and safe.** Current hard cap of 32768 is a latent panic (m=577 already hits max_value=7808; m>700 trends upward). Options, in order of preference:
-   - Grow fac_table on demand inside `r()` with a geometric resize guarded by a mutex-free check (each worker owns its own extension) — simplest, works with `Arc`.
-   - Or: pre-size to a generous bound (e.g., 1 << 18) based on the observed trend, with an explicit `assert!` on overflow so failures are loud.
-   Pick (b) for simplicity in this focused pass; (a) is a follow-up if m-range grows further.
-
-5. **CLI via `clap`.** `--m-range START..=END`, `--max-steps N`, `--output PATH`, `--threads N`, `--fac-table-size N`. Replace the hardcoded `results_500.csv`, `1..=2000`, batch size, etc.
-   - include a way to read results.csv and revisit the entries that maxed out the max_length and have value 'None, None' with higher max.
-
-6. **Unit tests.** For m ∈ {1, 2, 3, 5, 8}, run both the new Brent-based `r()` and a stored-sequence reference (kept in `tests/` only) and assert `repeat_after`, `max_value`, cycle length, and first 1000 terms agree. Cross-check the numbers in `results.csv` / `compiled_results.csv` for small m.
-
-7. **Criterion bench.** `r(m, ·)` for m ∈ {16, 64, 256}. Establishes a baseline for future tuning (SIMD, state hashing, etc.).
-
-## Phase B — Math output (weekend 2)
-
-1. **Extend the result record.** `RResult` gains `cycle_length`, `cycle_max`, `cycle_min`, `most_common_tail_value`, `distinct_tail_values`, `full_cycle_sequence`. CSV header updated to match `compiled_results.csv` plus the new columns. This reproduces and supersedes the existing compiled CSV from a single run.
+# Phase B — Math output (weekend 2)
 
 2. **Extended data run.** With the rewrite, re-run m = 1..=2000 (or further — determined by real runtime after the rewrite lands). Resolve the m=569 `None, None` gap. Save under `data/` with the run parameters recorded in a sidecar `.toml`.
 
