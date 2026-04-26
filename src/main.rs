@@ -1,11 +1,10 @@
 use std::{
-    cmp::min,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
+    sync::{Arc, mpsc},
+    time::{Duration, Instant},
 };
 
 use clap::{Parser, Subcommand};
@@ -33,9 +32,10 @@ struct Cli {
     #[arg(long, default_value_t = 1usize << 18, global = true)]
     fac_table_size: usize,
 
-    /// Parallel batch size. Larger than the CPU count gives better load
-    /// balancing; smaller reduces peak memory at large m.
-    #[arg(long, default_value_t = 8, global = true)]
+    /// Deprecated. The runner now streams trials through rayon's work-stealing
+    /// scheduler so a single slow m no longer stalls a whole batch; this flag
+    /// is accepted for compatibility but ignored.
+    #[arg(long, default_value_t = 8, global = true, hide = true)]
     batch_size: usize,
 
     /// Print a heartbeat every N steps within each in-flight trial.
@@ -131,14 +131,15 @@ fn main() {
         std::fs::create_dir_all(dir).expect("failed to create checkpoint directory");
     }
 
+    let _ = cli.batch_size; // deprecated
+
     match cli.command {
         Command::Scan { m_range, output } => {
             run_scan(
                 m_range.0..=m_range.1,
                 cli.max_steps,
-                cli.batch_size,
                 cli.progress_interval,
-                cli.checkpoint_dir.as_deref(),
+                cli.checkpoint_dir.clone(),
                 cli.checkpoint_interval,
                 &output,
                 fac_table,
@@ -149,9 +150,8 @@ fn main() {
                 &input,
                 &output,
                 cli.max_steps,
-                cli.batch_size,
                 cli.progress_interval,
-                cli.checkpoint_dir.as_deref(),
+                cli.checkpoint_dir.clone(),
                 cli.checkpoint_interval,
                 fac_table,
             );
@@ -171,9 +171,8 @@ const CSV_HEADER: &str = "m, repeat_after, max_value, most_common_tail_value, cy
 fn run_scan(
     trials: std::ops::RangeInclusive<usize>,
     max_length: usize,
-    batch_size: usize,
     progress_interval: usize,
-    checkpoint_dir: Option<&Path>,
+    checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
     output: &Path,
     fac_table: Arc<Vec<u8>>,
@@ -181,10 +180,9 @@ fn run_scan(
     let mut file = File::create(output).expect("failed to open output CSV");
     writeln!(file, "{}", CSV_HEADER).unwrap();
 
-    run_batches(
+    run_stream(
         trials.clone().collect(),
         max_length,
-        batch_size,
         progress_interval,
         checkpoint_dir,
         checkpoint_interval,
@@ -201,9 +199,8 @@ fn run_revisit(
     input: &Path,
     output: &Path,
     max_length: usize,
-    batch_size: usize,
     progress_interval: usize,
-    checkpoint_dir: Option<&Path>,
+    checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
     fac_table: Arc<Vec<u8>>,
 ) {
@@ -216,7 +213,7 @@ fn run_revisit(
 
     if none_ms.is_empty() {
         println!("No 'None' rows in {}; nothing to revisit.", input.display());
-        write_csv(output, &rows, &std::collections::HashMap::new());
+        write_csv(output, &rows, &HashMap::new());
         return;
     }
 
@@ -227,12 +224,10 @@ fn run_revisit(
         max_length,
     );
 
-    let mut resolved: std::collections::HashMap<usize, RResult> =
-        std::collections::HashMap::new();
-    run_batches(
+    let mut resolved: HashMap<usize, RResult> = HashMap::new();
+    run_stream(
         none_ms.clone(),
         max_length,
-        batch_size,
         progress_interval,
         checkpoint_dir,
         checkpoint_interval,
@@ -293,7 +288,12 @@ fn read_csv(path: &Path) -> Vec<Row> {
         if trimmed.is_empty() {
             continue;
         }
-        let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+        // Split on commas or tabs: older `results.csv` rows use tab separators for
+        // `m\tNone\tNone` timeout lines while everything else is comma-separated.
+        let parts: Vec<&str> = trimmed
+            .split(|c| c == ',' || c == '\t')
+            .map(str::trim)
+            .collect();
 
         if lineno == 0 && parts.first().map(|p| p.eq_ignore_ascii_case("m")) == Some(true) {
             header_cols = Some(parts.len());
@@ -370,89 +370,131 @@ fn write_csv(
     file.flush().unwrap();
 }
 
-fn run_batches<F>(
-    trials: Vec<usize>,
+fn run_one_trial(
+    m: usize,
     max_length: usize,
-    batch_size: usize,
     progress_interval: usize,
     checkpoint_dir: Option<&Path>,
+    checkpoint_interval: usize,
+    fac_table: Arc<Vec<u8>>,
+) -> RResult {
+    let progress_cb = |p: Progress| {
+        let phase = match p.phase {
+            ProgressPhase::Brent => "brent",
+            ProgressPhase::FindMu => "mu   ",
+        };
+        let pct = (p.step as f64 / max_length as f64) * 100.0;
+        println!(
+            "[m={:>4} {}] step {:>14} ({:>5.1}% of cap), max_value={}",
+            m, phase, p.step, pct, p.max_value,
+        );
+    };
+    match checkpoint_dir {
+        Some(dir) => {
+            let path = dir.join(format!("m{}.ckpt", m));
+            r_resumable(
+                m,
+                max_length,
+                fac_table,
+                progress_interval,
+                progress_cb,
+                &path,
+                checkpoint_interval,
+            )
+            .unwrap_or_else(|e| panic!("checkpoint error for m={}: {}", m, e))
+        }
+        None => r_with_progress(m, max_length, fac_table, progress_interval, progress_cb),
+    }
+}
+
+// Streams trials through rayon's work-stealing scheduler, sending each completed
+// (m, result) on a channel. The consumer holds completed-but-not-yet-flushable
+// results in a `HashMap` and emits them to `on_result` strictly in m-order so the
+// output CSV stays sorted. Per-trial completion lines print in completion order
+// (not m-order) so live progress reflects which workers actually finished.
+fn run_stream<F>(
+    trials: Vec<usize>,
+    max_length: usize,
+    progress_interval: usize,
+    checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
     fac_table: Arc<Vec<u8>>,
     mut on_result: F,
 ) where
     F: FnMut(usize, RResult),
 {
-    assert!(batch_size >= 1, "--batch-size must be >= 1");
-    let mut start = 0;
-    while start < trials.len() {
-        let end = min(start + batch_size, trials.len());
-        let batch = &trials[start..end];
-        start = end;
+    if trials.is_empty() {
+        return;
+    }
 
-        let first = batch.first().copied().unwrap_or(0);
-        let last = batch.last().copied().unwrap_or(0);
-        println!("\nStarting batch: {}..={}", first, last);
-        let batch_start = Instant::now();
-        let results: Vec<(usize, RResult)> = batch
-            .to_vec()
-            .into_par_iter()
-            .map(|m| {
-                let progress_cb = |p: Progress| {
-                    let phase = match p.phase {
-                        ProgressPhase::Brent => "brent",
-                        ProgressPhase::FindMu => "mu   ",
-                    };
-                    let pct = (p.step as f64 / max_length as f64) * 100.0;
+    let total = trials.len();
+    let trials_for_worker = trials.clone();
+    let stream_start = Instant::now();
+    println!("\nStreaming {} trials...", total);
+
+    let (tx, rx) = mpsc::channel::<(usize, RResult, Duration)>();
+
+    // Producer: rayon par_iter sends each result through `tx` as soon as it
+    // finishes. The owned `tx` and clones held by `for_each_with` are dropped
+    // when the iter completes, which closes the channel and unblocks the
+    // consumer below.
+    let producer = std::thread::spawn(move || {
+        trials_for_worker.into_par_iter().for_each_with(tx, |tx, m| {
+            let started = Instant::now();
+            let result = run_one_trial(
+                m,
+                max_length,
+                progress_interval,
+                checkpoint_dir.as_deref(),
+                checkpoint_interval,
+                fac_table.clone(),
+            );
+            let _ = tx.send((m, result, started.elapsed()));
+        });
+    });
+
+    // Consumer: drain `rx` in completion order; flush to `on_result` strictly
+    // in m-order using the input `trials` vector as the expected sequence.
+    let mut pending: HashMap<usize, RResult> = HashMap::new();
+    let mut next_idx = 0usize;
+    while next_idx < total {
+        let next_m = trials[next_idx];
+        if let Some(r) = pending.remove(&next_m) {
+            on_result(next_m, r);
+            next_idx += 1;
+            continue;
+        }
+        match rx.recv() {
+            Ok((m, result, dur)) => {
+                if let Some(rep_after) = result.repeat_after {
                     println!(
-                        "[m={:>4} {}] step {:>14} ({:>5.1}% of cap), max_value={}",
-                        m, phase, p.step, pct, p.max_value,
+                        "R(n,{}): Repeated @ n={}. Max val: {}. Cycle len: {}. ({:.2}s)",
+                        m,
+                        rep_after,
+                        result.max_value,
+                        result.cycle_length.unwrap_or(0),
+                        dur.as_secs_f64(),
                     );
-                };
-                let result = match checkpoint_dir {
-                    Some(dir) => {
-                        let path = dir.join(format!("m{}.ckpt", m));
-                        r_resumable(
-                            m,
-                            max_length,
-                            fac_table.clone(),
-                            progress_interval,
-                            progress_cb,
-                            &path,
-                            checkpoint_interval,
-                        )
-                        .unwrap_or_else(|e| panic!("checkpoint error for m={}: {}", m, e))
-                    }
-                    None => r_with_progress(
+                } else {
+                    println!(
+                        "R(n,{}): no repeat for n<{} ({:.2}s)",
                         m,
                         max_length,
-                        fac_table.clone(),
-                        progress_interval,
-                        progress_cb,
-                    ),
-                };
-                (m, result)
-            })
-            .collect();
-        for (m, result) in results {
-            if let Some(rep_after) = result.repeat_after {
-                println!(
-                    "R(n,{}): Repeated @ n={}. Max val: {}. Cycle len: {}.",
-                    m,
-                    rep_after,
-                    result.max_value,
-                    result.cycle_length.unwrap_or(0),
-                );
-            } else {
-                println!("R(n,{})", m);
-                println!("!!!!  No repeat for n<{}", max_length);
+                        dur.as_secs_f64()
+                    );
+                }
+                pending.insert(m, result);
             }
-            on_result(m, result);
+            Err(_) => break,
         }
-        println!(
-            "Batch finished in {} seconds",
-            batch_start.elapsed().as_secs_f64()
-        );
     }
+
+    producer.join().expect("producer thread panicked");
+    println!(
+        "Streamed {} trials in {:.2}s",
+        total,
+        stream_start.elapsed().as_secs_f64()
+    );
 }
 
 fn write_result_row(file: &mut File, m: usize, result: &RResult) {
