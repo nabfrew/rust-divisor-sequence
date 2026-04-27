@@ -4,6 +4,10 @@
 - `tests/reference.rs` covers m ∈ {1, 2, 3, 5, 8} only. Bugs that only surface at large m won't be caught.
 - Single test: `cargo test --release <test_name>`, e.g. `cargo test --release brent_matches_reference_small_m`.
 
+# Commit
+
+- Commit changes with descriptive message in conventional commites format.
+
 # Architecture
 
 - `r() → r_with_progress() → r_resumable()` is a layered API: each is a strict superset of the previous, sharing the Brent main loop on `State`. `r()` is a no-progress wrapper used by tests/benches; `r_with_progress` adds a heartbeat callback for the CLI; `r_resumable` adds checkpoint save/load on top.
