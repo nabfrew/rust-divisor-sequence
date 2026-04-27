@@ -11,6 +11,11 @@ pub struct RResult {
     pub cycle_min: Option<u16>,
     pub most_common_tail_value: Option<u16>,
     pub distinct_tail_values: Option<usize>,
+    // Value→count multiset for one full period of the tail. Populated whenever a cycle is
+    // detected (alongside the scalar stats above) and `None` on timeout. Lets callers like
+    // `dump-signature` persist the attractor signature without re-running the trial; the
+    // ordered period is intentionally **not** materialised — it can be 10⁷+ terms at large m.
+    pub signature: Option<HashMap<u16, u64>>,
 }
 
 // Table of divisor counts: `build_fac_table(n)[i] = τ(i)` for 1 <= i < n, plus τ(0) = 0.
@@ -257,7 +262,7 @@ where
                 &mut on_progress,
                 max_value,
             );
-            let stats = summarize_cycle(cycle_state, lam, &fac_table);
+            let (stats, signature) = summarize_cycle(cycle_state, lam, &fac_table);
             return RResult {
                 repeat_after: Some(mu + lam + m),
                 max_value,
@@ -266,6 +271,7 @@ where
                 cycle_min: Some(stats.min),
                 most_common_tail_value: Some(stats.most_common),
                 distinct_tail_values: Some(stats.distinct),
+                signature: Some(signature),
             };
         }
 
@@ -306,6 +312,7 @@ fn timed_out(max_value: u16) -> RResult {
         cycle_min: None,
         most_common_tail_value: None,
         distinct_tail_values: None,
+        signature: None,
     }
 }
 
@@ -395,7 +402,7 @@ where
                 &mut on_progress,
                 max_value,
             );
-            let stats = summarize_cycle(cycle_state, lam, &fac_table);
+            let (stats, signature) = summarize_cycle(cycle_state, lam, &fac_table);
             // Trial complete: drop the sidecar so a future invocation starts fresh.
             let _ = std::fs::remove_file(checkpoint_path);
             return Ok(RResult {
@@ -406,6 +413,7 @@ where
                 cycle_min: Some(stats.min),
                 most_common_tail_value: Some(stats.most_common),
                 distinct_tail_values: Some(stats.distinct),
+                signature: Some(signature),
             });
         }
 
@@ -546,7 +554,11 @@ struct CycleStats {
 // The vec would be O(lam) which hits 10^7+ at larger m; stats fit in a HashMap keyed by the
 // distinct tail values (always ≪ lam in practice). Ties on "most common" break toward the
 // smaller value so the result is deterministic regardless of HashMap iteration order.
-fn summarize_cycle(mut state: State, lam: usize, fac_table: &[u8]) -> CycleStats {
+//
+// Returns (stats, counts): `counts` is the value→count multiset of the period. Phase B's
+// attractor catalog needs this map; the original signature discarded it. Returning the
+// HashMap is essentially free — `summarize_cycle` allocated it anyway.
+fn summarize_cycle(mut state: State, lam: usize, fac_table: &[u8]) -> (CycleStats, HashMap<u16, u64>) {
     assert!(lam >= 1, "cycle must have positive length");
     let first = state.step(fac_table);
     let mut counts: HashMap<u16, u64> = HashMap::new();
@@ -567,12 +579,15 @@ fn summarize_cycle(mut state: State, lam: usize, fac_table: &[u8]) -> CycleStats
         .iter()
         .min_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)))
         .expect("non-empty cycle has at least one distinct value");
-    CycleStats {
-        max,
-        min,
-        most_common,
-        distinct: counts.len(),
-    }
+    (
+        CycleStats {
+            max,
+            min,
+            most_common,
+            distinct: counts.len(),
+        },
+        counts,
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,19 @@ enum Command {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Re-run a single m and write the cycle's value→count multiset (the attractor
+    /// "signature") to a CSV. Output rows are sorted by value so two runs on the
+    /// same m produce byte-identical output. The ordered period is never
+    /// materialised — periods of 10⁷+ terms exist at large m.
+    DumpSignature {
+        /// The single m to dump.
+        #[arg(long)]
+        m: usize,
+
+        /// Output CSV path (`value,count` per line, sorted by value).
+        #[arg(long)]
+        output: PathBuf,
+    },
 }
 
 fn parse_range(s: &str) -> Result<(usize, usize), String> {
@@ -153,6 +166,17 @@ fn main() {
                 cli.progress_interval,
                 cli.checkpoint_dir.clone(),
                 cli.checkpoint_interval,
+                fac_table,
+            );
+        }
+        Command::DumpSignature { m, output } => {
+            run_dump_signature(
+                m,
+                cli.max_steps,
+                cli.progress_interval,
+                cli.checkpoint_dir.clone(),
+                cli.checkpoint_interval,
+                &output,
                 fac_table,
             );
         }
@@ -238,6 +262,46 @@ fn run_revisit(
     );
 
     write_csv(output, &rows, &resolved);
+}
+
+fn run_dump_signature(
+    m: usize,
+    max_length: usize,
+    progress_interval: usize,
+    checkpoint_dir: Option<PathBuf>,
+    checkpoint_interval: usize,
+    output: &Path,
+    fac_table: Arc<Vec<u8>>,
+) {
+    let result = run_one_trial(
+        m,
+        max_length,
+        progress_interval,
+        checkpoint_dir.as_deref(),
+        checkpoint_interval,
+        fac_table,
+    );
+    let signature = result.signature.unwrap_or_else(|| {
+        panic!(
+            "dump-signature: no cycle found for m={} within --max-steps={}",
+            m, max_length
+        )
+    });
+    let mut entries: Vec<(u16, u64)> = signature.into_iter().collect();
+    entries.sort_unstable_by_key(|(v, _)| *v);
+
+    let mut file = File::create(output).expect("failed to open output CSV");
+    writeln!(file, "value,count").unwrap();
+    for (v, c) in entries {
+        writeln!(file, "{},{}", v, c).unwrap();
+    }
+    file.flush().unwrap();
+    println!(
+        "dump-signature m={}: wrote {} distinct values to {}",
+        m,
+        result.distinct_tail_values.unwrap_or(0),
+        output.display()
+    );
 }
 
 // One CSV row in the new format. Fields loaded from an old 3-column CSV keep the new

@@ -1,169 +1,259 @@
-# Next-level plan: divisor-sequence exploration
+# Divisor-sequence roadmap
 
-## Context
+## Status snapshot (2026-04-27)
 
-The project computes R(n, m) = sum of d(·) (divisor-count) over the last m terms, seeded with m ones, and looks for when the sequence becomes periodic. Results are tabulated in `results.csv` / `compiled_results.csv` for m up to ~700.
+Phase A (perf rewrite) and the engineering side of Phase B are complete. The
+remaining work is mostly **analysis on data we already have** plus a handful
+of small Rust additions to extract structural data the current CSV doesn't
+expose.
 
-Two concrete limits motivate this plan:
+### Shipped
 
-1. **Performance wall.** With `max_length = 1e9`, m=569 already returns `None, None` (results.csv:572) — detection itself is the bottleneck, not the underlying mathematics. `repeats_m` calls `gs_find` over the entire stored sequence every 10^6 steps and stores every value in a `Vec<u16>` (potentially ~10^8 entries ≈ 200 MB/trial), which caps both the m-range and max_length.
-2. **Math latent in the data.** Each column of the CSV is a candidate integer sequence (max_value(m), repeat_after(m), cycle_length(m), most-common-in-tail(m)). None of these appear to have been characterized or checked against OEIS. Conjectures about growth rates aren't written down anywhere.
+- `r() / r_with_progress() / r_resumable()` layered API on `State` with
+  Brent + snapshot stack, Rabin-Karp window hash, `find_cycle_start` walking
+  newest→oldest. (`src/lib.rs`)
+- Streaming `run_stream` runner: rayon `into_par_iter` + mpsc + in-order
+  flush, so a single slow m doesn't stall peers. (`src/main.rs`)
+- Checkpoint format with documented invariants; resume on restart, deleted
+  on success, preserved on timeout.
+- `scan` / `revisit` / `dump-signature` CLI subcommands.
+- 8-column CSV format (`m, repeat_after, max_value,
+  most_common_tail_value, cycle_length, cycle_max, cycle_min,
+  distinct_tail_values`).
+- `results_new.csv`: m=1..=1299, no `None` rows.
+- `results_new_4.csv`: m=1300..=1349, 22 `None` rows still pending.
+- `analysis/build_attractors.py` → `analysis/attractors.csv`
+  (288 multiset clusters), `analysis/value_set_clusters.csv`,
+  `analysis/cycle_signatures/<m>.csv` (1030 signature dumps).
+- `analysis/build_bfiles.py` → `analysis/oeis_bfiles/` (7 b-files).
+- Reference tests for m∈{1,2,3,5,8} and criterion benches at m∈{16, 64, 256,
+  512, 700}.
 
-Scope: one focused rewrite (math + performance, d(n) only). Goal: clear the m=569 wall, gather richer per-m statistics, and produce a minimal research artifact (notebook + b-files) that makes the data usable outside Rust.
+### Not shipped / open
 
-## Key mathematical observation driving the perf rewrite
+- Phase B §1 long tail past m=1349; 22 timeouts in 1300–1349 unresolved.
+- Phase B §3 `analysis/explore.ipynb` — no notebook exists.
+- Phase B §4 outlier characterisation.
+- Phase B §5 linear-segment detector.
+- Phase B §6 m·ln(m) bound quantification.
+- Phase B §7 OEIS submission log (b-files exist, but no hits/misses recorded).
+- Phase B §8 `NOTES.md` — research log file does not exist.
+- Threads from `human_notes.md` / `summary.md` not in ROADMAP:
+  fixed-point family enumeration, 8m hitting-time scaling, period
+  resonance regimes, state-space lock-in metric.
 
-The state of the dynamical system at step t is exactly the sliding window of the last m values (everything else — the running sum, the ring buffer — is derivable from it). The map state → next-state is deterministic. So:
+## Phase B remainder — analysis on existing data
 
-- The trajectory enters a cycle the first time a window-state repeats.
-- Cycle detection reduces to detecting a repeated m-tuple, which is **Brent's algorithm** over the state — no substring search, no stored sequence.
-- `repeat_after` = first-occurrence step of the cycle state; `cycle_length` = current step − repeat_after. Currently the code conflates these (CSV has `repeat_after` but no `cycle_length` as a distinct column, and the compiled CSV's `most common value in tail` isn't reproducible from `results.csv` alone).
+These need no new Rust. They consume `results_new*.csv`,
+`analysis/attractors.csv`, `analysis/value_set_clusters.csv`, and the
+per-m signature files.
 
-This single observation replaces both `gs_find` (O(seq_len) each check) and `binary_repeat_search` (O(log seq_len) sequence scans) with O(1)-memory cycle detection.
+### B.3 `analysis/explore.ipynb`
 
-## Files to modify / add
+Plots, all on the merged `results_new.csv` + `results_new_4.csv`:
 
-- `src/main.rs` — shrink to CLI entry point only.
-- `src/lib.rs` (new) — `r()`, `RResult`, sieve, Brent detector; all unit-testable.
-- `Cargo.toml` — drop `galil-seiferas` and `prime-factor`; add `clap`, `criterion` (dev), keep `rayon`.
-- `tests/reference.rs` (new) — small-m correctness tests vs. a naive stored-sequence reference.
-- `benches/r.rs` (new) — criterion benches for small/medium m.
-- `analysis/explore.ipynb` (new) — load CSV, plot repeat_after(m), max_value(m), cycle_length(m), log-log fits.
-- `analysis/oeis_bfiles/` (new) — generated b-files per derived sequence, ready for OEIS submission.
-- `NOTES.md` (new) — running research log: conjectures, plots, OEIS IDs if found.
+- `repeat_after(m)` log-log with a fit; flag the `cycle_length = m+1`
+  vs. multi-m-cluster vs. fixed-point (`cycle_length = 1`) populations
+  separately — they almost certainly have different scaling laws.
+- `max_value(m)` and `max_value / m`.
+- `cycle_length(m)` with the `m+1` resonance band called out (currently
+  ~554 of 1158 rows in `results_new.csv`).
+- `cycle_min(m)`, `cycle_max(m)` overlaid with `m·ln(m)`, the
+  Hardy-Ramanujan anchor `m·H(m)`, and the trivial lower bound `m`.
+- `(cycle_max − cycle_min)(m)` and `distinct_tail_values(m)` — both
+  flag the same handful of outliers (532, 534, 601, 630, ~738–751,
+  1082, …).
+- Scatter of m coloured by `value_set_id` (large clusters jump out as
+  horizontal bands; isolated outlier m's appear as singletons).
+- Run-mean of cycle values vs. `m·ln(m)` (the human-notes invariant
+  claim: error <0.01%). Quantify whether that error is genuinely that
+  tight or just looks tight on a log scale.
 
+Verification: `jupyter nbconvert --execute analysis/explore.ipynb`
+runs clean and re-emits every figure.
 
-# Phase B — Math output
+### B.4 Outlier characterisation
 
-Phase A landed: `results_new.csv` covers m=1..=1158 with no `None` rows in the
-8-column format (`m, repeat_after, max_value, most_common_tail_value,
-cycle_length, cycle_max, cycle_min, distinct_tail_values`). The original m=569
-wall is gone and the four extra cycle-summary columns surface structure the
-original Phase B plotting list ignored. Plan refocuses on that structure.
+For m where `cycle_max − cycle_min ≫ 100` or `distinct_tail_values ≫ 50`
+(under 20 m's in current data), check the prime-factor structure of the
+integers entering/leaving the window. Hypothesis from `human_notes.md`:
+confluence of highly-composite numbers in the window broadens the
+attractor. Confirm or refute by correlating outlier m's with τ-spikes
+among nearby integers (look at τ over the window's value range).
 
-## 1. Extended data run
+Output: a table per outlier m in the notebook + a one-paragraph entry
+in `NOTES.md`.
 
-Push m past 1158. Calibrate `--max-steps` for the outlier class — observed
-`repeat_after` already reaches ~2×10¹⁰ in current data, so allocate ~10¹¹
-and lean on `--checkpoint-dir` for the long tail. Run parameters recorded in
-a sidecar `.toml` next to the CSV.
+### B.5 Linear-segment detector
 
-## 2. Attractor catalog (headline)
+Slide an OLS over `cycle_min(m)` and flag runs of length ≥ K with R²
+≥ 0.99 and slope in a small rational set. Per `human_notes.md` these
+typically lead into a stable attractor and have wider `cycle_max −
+cycle_min` spread than the attractor itself. Output `(m_start, m_end,
+slope, target_value_set_id)` to `NOTES.md`. Implement in the notebook,
+not Rust.
 
-Many m share a cycle whose value-multiset is essentially identical:
-e.g. `cycle_min/cycle_max = 4402/4442` covers nine m's just in 559–593,
-`2624/2638` covers a much larger cluster, `4602/4612`, `4736/4744`,
-`5130/5158`, `6210/6238`, `9394/9406` are recurring signatures. Cluster m by
-`(cycle_min, cycle_max, distinct_tail_values)` and confirm "shared signature"
-means "same value-multiset" by inspecting one representative m per cluster.
+### B.6 m·ln(m) bound — quantitative
 
-**Persistence shape:** cycles can hit 10⁷+ ordered terms — do **not**
-materialise the period. Persist only the value→count multiset, which is
-bounded by `distinct_tail_values` (worst observed ≈ 7.4k for the m=741
-cluster, ~80 KB max per dump; typical attractor is 3–5 values, ~100 B).
-`summarize_cycle` already builds this HashMap and discards it; expose it.
+- Median, p5/p95 of `cycle_min`, `cycle_max`, `max_value` relative to
+  `m·ln(m)` and `m·H(m)`.
+- Mean-of-cycle / `m·ln(m)` distribution (the human-notes invariant).
+- Trivial lower bound `cycle_min ≥ m` is loose in the data — try to
+  fit a tighter lower bound (perhaps `m·ln(ln m)` plus a constant).
+- If the band tightens with growing m, record the conjecture in
+  `NOTES.md` along with the empirical constants.
 
-Concrete deliverables:
+### B.7 OEIS lookups
 
-- New `dump-signature --m N --output PATH` CLI subcommand: re-runs `r()`
-  for one m and writes `value,count` per line. Multiset only; never the
-  ordered period.
-- `analysis/attractors.csv`: one row per cluster — `signature_id,
-  distinct_count, cycle_min, cycle_max, signature_hash, representative_m,
-  member_m_list`.
-- `analysis/cycle_signatures/<m>.csv`: one file per cluster representative
-  (and per outlier from §4). Don't dump for every m — redundant for the
-  cluster majority.
+For each generated b-file, paste first 20 terms into oeis.org by hand
+and record hits / misses in `NOTES.md`. Also search the recurring
+attractor extremes as a stand-alone integer sequence (2638, 4442, 4612,
+4744, 5158, 6238, 9406, …) — these are the `cycle_max` constants of
+the largest multiset clusters. Skip `cycle_length(m)` for the
+`cycle_length = m+1` majority.
 
-## 3. `analysis/explore.ipynb`
+### B.8 `NOTES.md`
 
-Load `results_new.csv`, plot:
+Lead with the attractor catalog (size of largest clusters, the
+`(cycle_min, cycle_max, distinct_tail_values)` proxy vs. the actual
+multiset hash). Sections: problem statement, finite-state-space
+periodicity argument, attractor catalog summary, m·ln(m) bound
+conjecture with plots, outlier list (B.4), linear-segment list (B.5),
+fixed-point families (C.1, see below), 8m hitting-time scaling (C.2),
+OEIS hits / misses, open questions.
 
-- `repeat_after(m)`, log-log with a fit.
-- `max_value(m)`, plus `max_value / m`.
-- `cycle_length(m)`, with the `cycle_length = m+1` cluster (~554 of 1158
-  rows in current data) called out vs. the multi-m cycles.
-- `cycle_min(m)`, `cycle_max(m)` overlaid with `m·ln(m)` and the trivial
-  lower bound `m`. Empirical band width as a function of m.
-- `(cycle_max - cycle_min)(m)` and `distinct_tail_values(m)` — both flag
-  the ~10 outlier m's (532, 534, 601, 630, 738–751-region, 1082).
-- Scatter of m coloured by attractor cluster id from §2.
+## Phase C — math threads from `human_notes.md` / `summary.md`
 
-## 4. Outlier characterisation
+These are new and need small targeted code.
 
-For m where `cycle_max - cycle_min ≫ 100` or `distinct_tail_values ≫ 50`
-(~10 m's in current data), examine the prime-factor structure of the
-integers entering/leaving the window of length m around those values.
-Hypothesis from `human_notes.md`: confluence of highly-composite numbers
-sliding through the window broadens the attractor. Confirm or refute by
-correlating outlier m's with τ-spikes among nearby integers.
+### C.1 Fixed-point family enumeration
 
-## 5. Linear-segment detector
+Cycles of length 1 (`cycle_length == 1`) satisfy d(x) = x/m, so the
+fixed point is `most_common_tail_value` and the constraint is
+`τ(x) · m == x`. From `results_new.csv` the known fixed points
+(127, 167, 211, 613, 733, 1291) are all `x = 8m` with m prime.
 
-Slide an OLS over `cycle_min(m)` and flag runs of length ≥ K with R² ≥ 0.99
-and slope in a small rational set. Per `human_notes.md` these typically
-lead into a stable attractor and have wider `cycle_max - cycle_min` spread
-than the attractor itself. Output `(m_start, m_end, slope, target_cluster)`
-to `NOTES.md`.
+Pure-data task: filter all `cycle_length == 1` rows, group by `x/m`
+(the divisor count), and inspect the m-set per quotient. The 8m family
+should dominate; any composite m fixed point is interesting (the human
+notes raise 3m, 12m, 16m as candidates — verify whether any actually
+occur in the data and what factorisation makes that work).
 
-## 6. m·ln(m) bound
+Output: `analysis/fixed_points.csv` (`m, prime, x, x_over_m,
+m_prime_factorization`) + a `NOTES.md` section with the necessary
+condition for each quotient.
 
-Quantify the empirical band: median, p5/p95 of `cycle_min`, `cycle_max`,
-`max_value` relative to `m·ln(m)` and `m·H(m)` (Hardy-Ramanujan). Try to
-beat the trivial all-primes lower bound `≥ m`. If the band tightens with
-growing m, record the conjectured bound in `NOTES.md`.
+### C.2 8m prime hitting-time scaling
 
-## 7. OEIS artifacts
+For prime m where the trial resolves to x = 8m, plot m vs.
+`log(repeat_after)`. Per `human_notes.md` the suspicion is exponential
+scaling — confirm or refute with a regression. If the fit is clean,
+extrapolate the expected runtime for the unresolved primes in
+1300–1349 to size `--max-steps` and `--checkpoint-interval` for the
+next long run.
 
-b-files in `analysis/oeis_bfiles/` for: `repeat_after(m)`, `max_value(m)`,
-`cycle_max(m)`, `cycle_min(m)`, `distinct_tail_values(m)`,
-`(cycle_max - cycle_min)(m)`. Skip `cycle_length(m)` for the
-`cycle_length = m+1` majority — uninteresting; submit only the non-trivial
-subseries (m where `cycle_length ≠ m+1`). Also search the recurring
-attractor extremes as a stand-alone sequence (2638, 4442, 4612, 4744,
-5158, 6238, 9406, …) — these are the `cycle_max` constants of §2's
-clusters and are good OEIS candidates in their own right. Hits / misses
-logged in `NOTES.md`. Manual paste into oeis.org — no network automation.
+Output: figure in `explore.ipynb` + a row per prime in `NOTES.md` with
+predicted-vs-observed `repeat_after`.
 
-## 8. `NOTES.md` research log
+### C.3 `steps_to_lock_in` metric (Rust)
 
-Lead with the attractor catalog. Sections: problem statement, finite-state-
-space periodicity argument, attractor catalog summary, m·ln(m) bound
-conjecture with plots, outlier list (§4) with notes, linear-segment list
-(§5), OEIS hits / misses, open questions (non-uniform seeds, generalised
-arithmetic functions — explicitly out of scope here).
+Track when the dynamical system enters its "closed sub-region of state
+space" — i.e. when no new value enters the window for a sustained
+window. Two candidate definitions:
 
-## What is explicitly out of scope
+- **Strict (per human_notes):** the *set* of distinct divisor counts
+  in the window stops changing for ≥ 2m consecutive steps. Cheap to
+  maintain (a small histogram of u8 counts).
+- **Looser:** the *set* of distinct values in the window stops
+  changing. More expensive (window of u16, up to ~10⁴ distinct
+  values), and probably less mathematically clean.
 
-- Generalizing to other arithmetic functions (σ, φ, ω, Ω, λ).
-- GPU / SIMD. Revisit only if detection is the bottleneck again after Phase B.
-- Non-uniform seeds, basin-of-attraction maps.
-- Materialising full ordered cycle periods to disk (memory blowup at large m).
-- Publishing the crate, WASM demo, CI.
+Prefer the strict variant. Add `steps_to_lock_in: Option<usize>` to
+`RResult` and a 9th CSV column. The metric is the smallest step k at
+which `div_counts[k..k+2m]` introduces no new τ value.
 
-## Verification
+Then analysis-side: plot `repeat_after − steps_to_lock_in` vs.
+`steps_to_lock_in`. Hypothesis: the transient phase
+(`steps_to_lock_in`) and the closed-loop traversal
+(`repeat_after − steps_to_lock_in`) scale differently with m.
 
-- `cargo test --release` and `cargo bench --bench r` — pass per CLAUDE.md.
-- m=560..=572 spot diff against `results_new.csv` per CLAUDE.md (covers
-  the historically tricky m=569).
-- `jupyter nbconvert --execute analysis/explore.ipynb` runs clean on
-  `results_new.csv` and produces every plot in §3.
-- `dump-signature --m N` is deterministic: two runs on the same m produce
-  byte-identical output.
-- Attractor clustering: every member of a cluster shares the
-  representative's `signature_hash`. Clusters of size ≥ 2 verified by
-  comparing the dumped multisets pairwise.
-- `analysis/oeis_bfiles/*.txt` lint clean (one `n value` per line,
-  strictly increasing n, no gaps); first 20 terms match
-  `results_new.csv`.
+This *adds* a column rather than replacing one — old CSVs stay
+parseable; bump the CSV header reader in `read_csv` to default the
+new column to `None` for legacy rows.
+
+### C.4 Resonance period audit
+
+Cluster m by `cycle_length − m` (likely concentrated at 0, 1, 2). Plot
+the fraction of m in each resonance band as m grows. Pure data task,
+goes in `explore.ipynb` and `NOTES.md`.
+
+### C.5 Skipped: divisor-count rolling-hash rewrite
+
+`human_notes.md` proposes hashing the window of divisor counts (u8)
+instead of values (u16), framed as a perf win. **Don't.** The current
+`State.hash` is already a rolling u64 Rabin-Karp with O(1) update;
+hash collisions are ~2⁻⁶⁴ per compare. Switching the hashed type
+from u16 to u8 doesn't change the asymptotic cost or the memory
+footprint that matters (snapshots are ≈33 × m bytes, microseconds at
+m=1500). Detection is not the current bottleneck — `repeat_after`
+itself is. Leave this thread alone unless a future profile says
+otherwise; record this decision in `NOTES.md` so it doesn't keep
+resurfacing.
+
+Also skipped: state-space compression (the moving-average gating idea
+in `summary.md`). It would save memory we don't actually need to
+save.
+
+## Phase D — extended data run
+
+Push past m=1349 and resolve the 22 Nones in `results_new_4.csv`.
+
+- Run prime hitting-time scaling (C.2) **first**: it tells you whether
+  `--max-steps 10¹¹` is realistic for the long tail or whether some m
+  need 10¹² and a multi-day run.
+- Use `--checkpoint-dir` and a sidecar `.toml` with
+  `--max-steps`, `--checkpoint-interval`, range, fac-table size, and
+  start time for reproducibility.
+- Extend `results_new_4.csv` to 1500 first, then evaluate. Beyond
+  ~1500 the fac_table size (1<<18 = 262144) starts approaching
+  observed `max_value` (~20k for m≈1300), so monitor the panic from
+  `step()` and bump as needed.
+- The tricky-m spot-diff target stays m=560..=572 per CLAUDE.md.
 
 ## Critical-path files
 
-- `src/lib.rs::summarize_cycle` (lib.rs:549) — already builds the
-  value→count `HashMap`; needs an entry point that returns the map (not
-  just `CycleStats`) so the CLI can persist it.
-- `src/main.rs` — add `dump-signature` subcommand alongside `scan` /
-  `revisit`.
-- `analysis/explore.ipynb`, `analysis/attractors.csv`,
-  `analysis/cycle_signatures/`, `analysis/oeis_bfiles/`, `NOTES.md` —
-  all new.
+- `src/lib.rs` — only if implementing C.3 (`steps_to_lock_in`).
+  Touch points: extend `State` with a `tau_present: [bool; 256]`-ish
+  histogram (or `HashSet<u8>` keyed by τ values seen in current
+  window), update on each `step` as values enter/leave. Track
+  "consecutive steps with stable set" counter. Surface result in
+  `RResult` and `summarize_cycle`.
+- `src/main.rs` — extend CSV header + `write_result_row` +
+  `read_csv` (legacy `None` default) for C.3.
+- `analysis/explore.ipynb` — new, drives B.3, B.4, B.6, C.2, C.4.
+- `analysis/fixed_points.csv` — new, output of C.1 (script or
+  notebook cell).
+- `NOTES.md` — new, the research log itself.
+
+## Verification
+
+- `cargo test --release` and `cargo bench --bench r` clean per
+  CLAUDE.md.
+- m=560..=572 spot diff against `results_new.csv` after any lib.rs
+  change (covers the historically tricky m=569).
+- `jupyter nbconvert --execute analysis/explore.ipynb` runs clean.
+- `dump-signature --m N` remains deterministic across the C.3 change
+  (the new column doesn't enter the signature multiset).
+- For C.3: spot-check `steps_to_lock_in ≤ repeat_after − m` on every
+  resolved row (the lock-in must precede the cycle's first close).
+
+## Out of scope (unchanged)
+
+- Generalising to other arithmetic functions (σ, φ, ω, Ω, λ).
+- GPU / SIMD.
+- Non-uniform seeds, basin-of-attraction maps. (`human_notes.md`
+  raises sampling random initialisations to test the conjecture
+  "every prime m has a length-1 cycle, some just get stuck in a
+  different loop first." Interesting; out of scope here.)
+- Materialising full ordered cycle periods to disk.
+- Publishing the crate, WASM demo, CI.

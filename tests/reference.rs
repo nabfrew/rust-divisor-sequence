@@ -101,6 +101,7 @@ fn brent_matches_reference_small_m() {
             cycle_min,
             most_common_tail_value,
             distinct_tail_values,
+            signature,
         } = r(m, max_length, fac_table.clone());
 
         assert_eq!(
@@ -149,6 +150,19 @@ fn brent_matches_reference_small_m() {
             distinct_tail_values,
             Some(ref_distinct),
             "distinct_tail_values for m={}",
+            m
+        );
+
+        // Multiset equality: every value in the reference cycle has the same count in
+        // r()'s signature, and no extra keys exist.
+        let mut ref_counts: HashMap<u16, u64> = HashMap::new();
+        for &v in &cycle {
+            *ref_counts.entry(v).or_insert(0) += 1;
+        }
+        let sig = signature.expect("signature must be present when cycle resolves");
+        assert_eq!(
+            sig, ref_counts,
+            "signature multiset mismatch for m={}",
             m
         );
 
@@ -295,4 +309,5 @@ fn max_length_none_returns_partial_max() {
     assert!(res.cycle_length.is_none());
     assert!(res.most_common_tail_value.is_none());
     assert!(res.distinct_tail_values.is_none());
+    assert!(res.signature.is_none());
 }
