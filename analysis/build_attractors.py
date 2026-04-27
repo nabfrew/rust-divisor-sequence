@@ -1,19 +1,20 @@
 """Build the attractor catalog from results_new*.csv.
 
-Two clusterings, both true (verified pairwise by construction):
+The natural attractor unit turned out to be the **value-set** (the set of distinct
+values the cycle visits), not the multiset (value->count). Across all 1299 resolved
+m's every multiset is unique because cycle lengths differ — the proportions of each
+value rebalance with the period — but 290 distinct value-sets cover all 1299 m's,
+with the largest cluster at 196 members. So the catalog clusters by value-set.
 
-- **Multiset clusters** (`analysis/attractors.csv`): m's whose cycle has an identical
-  value->count multiset. signature_hash is sha256 of the sorted "value,count\\n" lines.
-- **Value-set clusters** (`analysis/value_set_clusters.csv`): m's whose cycle visits
-  the same SET of values (but possibly with different frequencies — the cycle
-  lengths can differ). value_set_hash is sha256 of the sorted "value\\n" lines.
-  Roll-up of the multiset clusters: each value-set cluster contains 1+ multiset
-  variants. The (cycle_min, cycle_max, distinct) triple is a value-set proxy in
-  practice but not provably so — see the NOTES.md research log.
-
-Per-m signature files are written to `analysis/cycle_signatures/<m>.csv` (one per
-resolved m, ~few MB total). The ordered period is never materialised — periods
-of 10^7+ ordered terms exist at large m.
+Outputs:
+- `analysis/attractors.csv`: one row per value-set cluster. Lists the value-set hash,
+  cluster size, distinct-value count, cycle-min, cycle-max, the smallest m as
+  representative, and the full member list. `multiset_variant_count` reports how
+  many distinct multisets exist within the cluster (= cluster size when cycle
+  lengths all differ, fewer when some m's share both value-set and cycle length).
+- `analysis/cycle_signatures/<m>.csv`: per-m value->count signature. One file per
+  resolved m so any member is inspectable. The ordered period is never
+  materialised — periods of 10^7+ terms exist at large m.
 
 Idempotent: existing per-m signature files are reused. Re-runs are cheap if no
 new m's were resolved.
@@ -30,7 +31,6 @@ ROOT = Path(__file__).resolve().parent.parent
 ANALYSIS = ROOT / "analysis"
 SIG_DIR = ANALYSIS / "cycle_signatures"
 ATTRACTORS_CSV = ANALYSIS / "attractors.csv"
-VALUE_SET_CSV = ANALYSIS / "value_set_clusters.csv"
 INPUT_CSVS = [ROOT / "results_new.csv", ROOT / "results_new_4.csv"]
 
 BINARY = ROOT / "target" / "release" / ("divisor_series.exe" if sys.platform == "win32" else "divisor_series")
@@ -162,48 +162,28 @@ def main():
     print(f"  value-set clusters: {len(valueset_clusters):>4} (singletons: "
           f"{sum(1 for v in valueset_clusters.values() if len(v) == 1)})")
 
-    # Map value_set_hash -> stable id (sorted by representative m).
+    # Phase 4: write attractors.csv (value-set clusters; multiset clustering was
+    # all singletons across this dataset and adds no information).
     sorted_vs = sorted(valueset_clusters.items(), key=lambda kv: kv[1][0])
-    vs_id_of = {h: i for i, (h, _) in enumerate(sorted_vs)}
-
-    # Phase 4: write attractors.csv (multiset clusters).
-    sorted_ms = sorted(multiset_clusters.items(), key=lambda kv: kv[1][0])
     print(f"writing {ATTRACTORS_CSV}")
     with ATTRACTORS_CSV.open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["signature_id", "distinct_count", "cycle_min", "cycle_max",
-                    "signature_hash", "value_set_id", "value_set_hash",
-                    "size", "representative_m", "member_m_list"])
-        for sid, (mh, members) in enumerate(sorted_ms):
-            rep = members[0]
-            _, vh, dv, cmin, cmax = by_m[rep]
-            w.writerow([
-                sid, dv, cmin, cmax, mh,
-                vs_id_of[vh], vh,
-                len(members), rep,
-                " ".join(str(m) for m in members),
-            ])
-
-    # Phase 5: write value_set_clusters.csv (value-set clusters, with multiset variant
-    # counts as roll-up).
-    print(f"writing {VALUE_SET_CSV}")
-    with VALUE_SET_CSV.open("w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["value_set_id", "distinct_count", "cycle_min", "cycle_max",
-                    "value_set_hash", "multiset_variant_count", "total_size",
+        w.writerow(["attractor_id", "size", "distinct_count", "cycle_min", "cycle_max",
+                    "value_set_hash", "multiset_variant_count",
                     "representative_m", "member_m_list"])
-        for vh, members in sorted_vs:
-            vid = vs_id_of[vh]
+        for vid, (vh, members) in enumerate(sorted_vs):
             rep = members[0]
             _, _, dv, cmin, cmax = by_m[rep]
             variants = len({by_m[m][0] for m in members})
             w.writerow([
-                vid, dv, cmin, cmax, vh,
-                variants, len(members), rep,
+                vid, len(members), dv, cmin, cmax, vh,
+                variants, rep,
                 " ".join(str(m) for m in members),
             ])
 
-    print(f"done: {len(sorted_ms)} multiset clusters, {len(sorted_vs)} value-set clusters")
+    print(f"done: {len(sorted_vs)} attractors (value-set clusters); "
+          f"multiset uniqueness: {len(multiset_clusters)} distinct multisets / "
+          f"{sum(len(v) for v in valueset_clusters.values())} m's")
 
 
 if __name__ == "__main__":
