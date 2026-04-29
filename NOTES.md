@@ -4,6 +4,62 @@ Per `ROADMAP.md` §B.8. Sections accrete as roadmap items are completed.
 Detailed per-task data lives next to its script under `analysis/`; this
 file is the index + conjecture record.
 
+## §2 — Attractor catalog (built 2026-04-29)
+
+Source: `results_new.csv` + `results_new_4.csv`, n=1449 resolved m's,
+m∈[1..1499] (gap-free up to 1349; 100 m's resolved beyond).
+Script: `analysis/build_attractors.py`.
+Per-m signatures: `analysis/cycle_signatures/<m>.csv` (one file per
+resolved m). Catalog tables: `analysis/attractors.csv` (canonical),
+`analysis/value_set_clusters.csv` (alias).
+
+**Multiset is the wrong unit.** Every resolved m has a **unique**
+value→count multiset (1449 distinct multisets across 1449 m's). The
+reason is structural: m's that visit the same set of cycle values
+generally have *different* cycle lengths, so the per-value frequencies
+rebalance. Roadmap §2's clustering criterion `(cycle_min, cycle_max,
+distinct_tail_values)` is therefore a **value-set proxy, not a multiset
+proxy** — confirmed by spot-checking m=24 vs m=25: same value set
+{180,184,186,188,190,192,194,198,202,206} but cycle lengths 101 vs 445.
+
+**Clustering by value-set.** 300 distinct value sets cover all 1449 m's:
+75 with ≥2 members, 225 singletons. Top 10 by size:
+
+| id  | size | distinct | cycle_min | cycle_max | m range       |
+|-----|------|----------|-----------|-----------|---------------|
+| 208 | 196  | 4        | 6210      | 6238      | 767..1296     |
+| 241 | 130  | 4        | 9394      | 9406      | 1114..1496    |
+| 103 |  74  | 4        | 2624      | 2638      | 330..582      |
+| 142 |  71  | 5        | 5130      | 5158      | 579..981      |
+|  72 |  50  | 6        | 1380      | 1402      | 174..287      |
+| 217 |  43  | 5        | 7546      | 7558      | 857..1445     |
+| 214 |  37  | 3        | 6192      | 6218      | 781..1177     |
+| 220 |  37  | 7        | 8806      | 8828      | 971..1094     |
+|  94 |  34  | 4        | 2028      | 2042      | 267..463      |
+| 280 |  32  | 7        | 10184     | 10202     | 1274..1497    |
+
+The largest cluster (id=208, n=196, value set {6210, 6218, 6230, 6238})
+covers ~13.5% of all resolved m's — a single attractor visited by
+nearly an order of magnitude more m's than the next-most-popular outside
+the top 4. Cluster id=241 at cycle_max=9406 covers most of m≥1114,
+suggesting attractor consolidation at large m.
+
+**Singletons** (225 of 300) are predominantly large-m, jittery
+trajectories that don't yet match any earlier attractor. Whether they
+remain isolated or merge as scan extends is open.
+
+**Verification.** Catalog membership is by construction (same hash =
+same value set bit-for-bit), so the pairwise check from the roadmap is
+trivially satisfied. The earlier 72-cluster "mismatch" we logged
+during scaffolding was the failed attempt to interpret `(cmin, cmax,
+distinct)` as a multiset key — it isn't, see above.
+
+**Open.** Whether the value-set hash collides for true attractors
+(distinct cycles in state space that emit the same value set) is not
+checked here — would require comparing window-traversal orbits, not
+just emitted-value sets. Current evidence: cluster member counts are
+well-clustered around a few sizes, suggesting no spurious merging.
+
 ## §6 — m·ln(m) bound (quantified 2026-04-28)
 
 Source: `results_new.csv`, n=1348 resolved m's, m∈[2..1349].
