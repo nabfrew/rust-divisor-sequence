@@ -1,0 +1,4 @@
+# Single-machine project (Ryzen 7 4800H): trade portability for speed.
+# See PERFORMANCE_PLAN.md Stage 0 — measured 1.18x on the hot loop.
+[build]
+rustflags = ["-C", "target-cpu=native"]
