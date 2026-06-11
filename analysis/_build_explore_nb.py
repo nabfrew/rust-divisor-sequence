@@ -582,6 +582,14 @@ a_{n+1} + \tau(a_{n+1}) = a_n + \tau(a_n) =: K.$$
 $S(K) = \{x : x + \tau(x) = K\}$ of a single integer K.** Verified
 bit-exactly on every length-(m+1) cycle in the data (cell below).
 
+The derivation only uses $-m \equiv 1 \pmod P$, i.e. **any period dividing
+m+1 inherits the invariant**. In the data the only such periods are
+P = m+1 itself and the nine λ = 1 fixed points (m = 1, 127, 167, 211,
+613, 733, 1103, 1117, 1291 — all prime), where it holds vacuously with
+$K = x + \tau(x)$ for the single value (and $x = m\tau(x)$ gives
+$K = (m+1)\tau(x)$, the λ = 1 case of $K = (m+1)\overline{\tau}$). No
+non-trivial proper divisor of m+1 ever appears as a period.
+
 ### Consequences
 
 - $\tau(x) = K - x$ on the cycle: the value–τ anticorrelation of §4 is
@@ -746,6 +754,67 @@ and 90% of its dominant K's also appear as m+1 K-attractors. Both inherit
 the 4m–9m band because their dominant K's sit in the same envelope.
 Detail: `analysis/length_mp2_K_structure.csv`,
 `length_2mp1_K_structure.csv`.
+
+### A weaker exact invariant for the other families: class sums mod gcd(m, P)
+
+The per-triple identity generalises: for any period P write d = P − m, so
+$\tau(a_{n+d}) = a_n + \tau(a_n) - a_{n+1}$. Summing it over one orbit of
+$n \mapsto n + d \pmod P$ telescopes the τ terms away, leaving
+$g = \gcd(d, P) = \gcd(m, P)$ exact linear relations:
+
+> **The cycle's value sums over positions in each residue class mod g are
+> all equal** (each class carries $\frac{1}{g}\Sigma a_n$).
+
+For g = 1 this is vacuous — and P = m+1 always has g = 1; there the
+pointwise invariant is the d = 1 collapse of the same telescoping.
+Non-trivial instances in the data (verified bit-exactly, cell below):
+
+- **m+2 family, even m** (g = 2): the two alternating-position sums
+  around the cycle are equal — m = 4, 16, 30, 80 all exact.
+- **2m+3 family, 3 | m** (g = 3): the three class sums are equal —
+  m = 552 (P = 1107, reached after an 18.2M-step transient; all three
+  sums are 1 636 864).
+
+This is more than conservation (the cycle's mass is *balanced* across
+position classes) but far less than the m+1 invariant: it constrains only
+g − 1 linear combinations instead of pinning every element to one level
+set — consistent with m+2 cycles spreading over 3–5 level sets where
+m+1 cycles live in exactly one.
+"""
+)
+
+code(
+    """
+# Verify the class-sum invariant on m+2 (g=2) and 2m+3 (g=3) cycles.
+# Ring-buffer simulation, no window history (repeat_after from the scan
+# data tells us exactly how far to run). m=552 takes ~30 s.
+import collections
+
+def cycle_class_sums(m, P, repeat_after, tau_limit):
+    T = [0] * (tau_limit + 1)
+    for i in range(1, tau_limit + 1):
+        for j in range(i, tau_limit + 1, i):
+            T[j] += 1
+    win, s = [1] * m, m                       # all-ones seed; tau(1) = 1
+    tail = collections.deque(maxlen=2 * P)
+    for step in range(repeat_after + 2 * P):
+        nxt = s
+        tail.append(nxt)
+        s += T[nxt] - T[win[step % m]]
+        win[step % m] = nxt
+    tail = list(tail)
+    assert all(tail[i] == tail[i + P] for i in range(len(tail) - P)), \\
+        f'm={m}: tail not {P}-periodic'
+    g = math.gcd(m, P)
+    return [sum(tail[-P:][c::g]) for c in range(g)]
+
+for m in (4, 16, 30, 80, 552):                # m+2 even-m cases, then 2m+3 with 3|m
+    row = combined.loc[combined.m == m].iloc[0]
+    P = int(row.cycle_length)
+    fam = 'm+2 ' if P == m + 2 else '2m+3'
+    sums = cycle_class_sums(m, P, int(row.repeat_after), int(row.max_value) + 1)
+    print(f'm={m:>4}  P={P:>5} ({fam})  g={math.gcd(m, P)}  '
+          f'class sums equal: {len(set(sums)) == 1}  {sums}')
 """
 )
 
@@ -1694,6 +1763,12 @@ md(
 - **Parity → Δ=4.** Prove that the minimal spacing between same-parity
   K's with populated S(K) is typically 4, formalising the dominant-K
   spacing in the m+2 family.
+- **Class-sum invariant follow-through** (§5): for g = gcd(m, P) > 1 the
+  position-class value sums are equal. Does this constrain the m+2
+  family's two "linker" entries — e.g. must they land in opposite
+  position-classes, and does the balance condition explain the Δ=4
+  dominant-K split? Only 5 cycles verified so far; sweep all even-m m+2
+  and 3|m 2m+3 signatures.
 - **Is the K catalogue saturating?** 60 distinct seed=1 K's at m ≤ 1788
   (135 in the basin). Does the count grow with m or is it bounded? An
   m = 10⁴ scan would discriminate — and also separate `mean_τ` bounded
