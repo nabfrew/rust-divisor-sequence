@@ -44,6 +44,13 @@ struct Cli {
     #[arg(long, default_value_t = 8, global = true, hide = true)]
     batch_size: usize,
 
+    /// Track the lock-in metric (`steps_to_lock_in` column). Off by default:
+    /// the per-step τ-set bookkeeping costs ~1.9× on the hot loop (measured,
+    /// see PERFORMANCE_PLAN.md Stage 1), and with the flag off the column is
+    /// `None` — matching every row in the recorded results_new*.csv files.
+    #[arg(long, default_value_t = false, global = true)]
+    lock_in: bool,
+
     /// Print a heartbeat every N steps within each in-flight trial.
     /// 0 disables heartbeats. Default 100M ≈ 1 line/sec at large m.
     #[arg(long, default_value_t = 100_000_000, global = true)]
@@ -239,6 +246,7 @@ fn main() {
                 cli.progress_interval,
                 cli.checkpoint_dir.clone(),
                 cli.checkpoint_interval,
+                cli.lock_in,
                 &output,
                 &skip_from,
                 &signatures_dir,
@@ -253,6 +261,7 @@ fn main() {
                 cli.progress_interval,
                 cli.checkpoint_dir.clone(),
                 cli.checkpoint_interval,
+                cli.lock_in,
                 fac_table,
             );
         }
@@ -263,6 +272,7 @@ fn main() {
                 cli.progress_interval,
                 cli.checkpoint_dir.clone(),
                 cli.checkpoint_interval,
+                cli.lock_in,
                 &output,
                 fac_table,
             );
@@ -289,6 +299,7 @@ fn main() {
                 resume,
                 cli.max_steps,
                 cli.progress_interval,
+                cli.lock_in,
                 &output,
                 fac_table,
             );
@@ -311,6 +322,7 @@ fn run_scan(
     progress_interval: usize,
     checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
+    lock_in: bool,
     output: &Path,
     skip_from: &[PathBuf],
     signatures_dir: &Path,
@@ -387,6 +399,7 @@ fn run_scan(
         progress_interval,
         checkpoint_dir,
         checkpoint_interval,
+        lock_in,
         fac_table,
         |m, result| {
             write_result_row(&mut file, m, &result);
@@ -421,6 +434,7 @@ fn run_revisit(
     progress_interval: usize,
     checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
+    lock_in: bool,
     fac_table: Arc<Vec<u16>>,
 ) {
     let rows = read_csv(input);
@@ -450,6 +464,7 @@ fn run_revisit(
         progress_interval,
         checkpoint_dir,
         checkpoint_interval,
+        lock_in,
         fac_table,
         |m, result| {
             resolved.insert(m, result);
@@ -465,6 +480,7 @@ fn run_dump_signature(
     progress_interval: usize,
     checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
+    lock_in: bool,
     output: &Path,
     fac_table: Arc<Vec<u16>>,
 ) {
@@ -474,6 +490,7 @@ fn run_dump_signature(
         progress_interval,
         checkpoint_dir.as_deref(),
         checkpoint_interval,
+        lock_in,
         fac_table,
     );
     let signature = result.signature.as_ref().unwrap_or_else(|| {
@@ -648,6 +665,7 @@ fn run_one_trial(
     progress_interval: usize,
     checkpoint_dir: Option<&Path>,
     checkpoint_interval: usize,
+    lock_in: bool,
     fac_table: Arc<Vec<u16>>,
 ) -> RResult {
     let progress_cb = |p: Progress| {
@@ -678,13 +696,14 @@ fn run_one_trial(
                 max_length,
                 fac_table,
                 progress_interval,
+                lock_in,
                 progress_cb,
                 &path,
                 checkpoint_interval,
             )
             .unwrap_or_else(|e| panic!("checkpoint error for m={}: {}", m, e))
         }
-        None => r_with_progress(m, max_length, fac_table, progress_interval, progress_cb),
+        None => r_with_progress(m, max_length, fac_table, progress_interval, lock_in, progress_cb),
     }
 }
 
@@ -700,6 +719,7 @@ fn run_stream<F>(
     progress_interval: usize,
     checkpoint_dir: Option<PathBuf>,
     checkpoint_interval: usize,
+    lock_in: bool,
     fac_table: Arc<Vec<u16>>,
     mut on_result: F,
 ) where
@@ -729,6 +749,7 @@ fn run_stream<F>(
                 progress_interval,
                 checkpoint_dir.as_deref(),
                 checkpoint_interval,
+                lock_in,
                 fac_table.clone(),
             );
             let _ = tx.send((m, result, started.elapsed()));
@@ -946,6 +967,7 @@ fn run_basin_scan(
     resume: bool,
     global_max_steps: usize,
     progress_interval: usize,
+    lock_in: bool,
     output: &Path,
     fac_table: Arc<Vec<u16>>,
 ) {
@@ -1055,6 +1077,7 @@ fn run_basin_scan(
                     max_length,
                     fac_table_for_worker.clone(),
                     progress_interval,
+                    lock_in,
                     |_p: Progress| {},
                 );
                 let elapsed = started.elapsed();

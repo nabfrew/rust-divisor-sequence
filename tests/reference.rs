@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use divisor_series::{RResult, build_fac_table, r, r_seeded_with_progress};
+use divisor_series::{RResult, build_fac_table, r, r_seeded_with_progress, r_with_progress};
 
 // Naive stored-sequence reference for the divisor-sum sliding-window system.
 //
@@ -303,7 +303,7 @@ fn seeded_with_ones_matches_default() {
     for &m in &[1usize, 2, 3, 5, 8] {
         let baseline = r(m, 100_000, fac_table.clone());
         let seed = vec![1u32; m];
-        let seeded = r_seeded_with_progress(m, &seed, 100_000, fac_table.clone(), 0, |_| {});
+        let seeded = r_seeded_with_progress(m, &seed, 100_000, fac_table.clone(), 0, false, |_| {});
         assert_eq!(seeded.repeat_after, baseline.repeat_after, "m={}", m);
         assert_eq!(seeded.max_value, baseline.max_value, "m={}", m);
         assert_eq!(seeded.cycle_length, baseline.cycle_length, "m={}", m);
@@ -322,9 +322,34 @@ fn seeded_nontrivial_lands_on_cycle() {
     let m = 8usize;
     let seed: Vec<u32> = vec![17, 23, 4, 9, 5, 12, 3, 1];
     let seed_max = *seed.iter().max().unwrap();
-    let res = r_seeded_with_progress(m, &seed, 100_000, fac_table, 0, |_| {});
+    let res = r_seeded_with_progress(m, &seed, 100_000, fac_table, 0, false, |_| {});
     assert!(res.repeat_after.is_some(), "seeded m=8 must resolve");
     assert!(res.max_value >= seed_max, "max_value {} must be ≥ seed max {}", res.max_value, seed_max);
+}
+
+#[test]
+fn lock_in_tracking_does_not_change_results() {
+    // The τ-set bookkeeping is compiled out of the hot loop by default
+    // (PERFORMANCE_PLAN.md Stage 1). Both monomorphizations must walk the
+    // identical trajectory: every field except `steps_to_lock_in` agrees.
+    let fac_table: Arc<Vec<u16>> = Arc::new(build_fac_table(1 << 16));
+    for &m in &[1usize, 2, 3, 5, 8, 14] {
+        let off = r_with_progress(m, 100_000, fac_table.clone(), 0, false, |_| {});
+        let on = r_with_progress(m, 100_000, fac_table.clone(), 0, true, |_| {});
+        assert_eq!(off.repeat_after, on.repeat_after, "m={}", m);
+        assert_eq!(off.max_value, on.max_value, "m={}", m);
+        assert_eq!(off.cycle_length, on.cycle_length, "m={}", m);
+        assert_eq!(off.cycle_max, on.cycle_max, "m={}", m);
+        assert_eq!(off.cycle_min, on.cycle_min, "m={}", m);
+        assert_eq!(off.most_common_tail_value, on.most_common_tail_value, "m={}", m);
+        assert_eq!(off.distinct_tail_values, on.distinct_tail_values, "m={}", m);
+        assert_eq!(off.signature, on.signature, "m={}", m);
+        assert_eq!(
+            off.steps_to_lock_in, None,
+            "lock-in must be None when tracking is off (m={})",
+            m
+        );
+    }
 }
 
 #[test]

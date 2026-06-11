@@ -206,8 +206,14 @@ impl State {
     // proof permits (4·m² ≪ u32::MAX for m up to ~32 000). The fac_table lookup
     // would panic with `index out of bounds` long before u32 truncation became
     // possible, since fac_table is sized to cover every value the run can emit.
+    //
+    // `TRACK_LOCK_IN` compiles the τ-set bookkeeping (tau_counts / tau_set_bitset /
+    // tau_set_stable_steps) in or out. The bookkeeping costs ~1.9× on the hot loop
+    // (measured at m=700 on the Ryzen 7 4800H — see PERFORMANCE_PLAN.md Stage 1),
+    // so it is opt-in: only the Brent main loop with `--lock-in` requested pays it.
+    // With the gate off the τ fields go stale; nothing reads them in that mode.
     #[inline]
-    fn step(&mut self, fac_table: &[u16]) -> u32 {
+    fn step<const TRACK_LOCK_IN: bool>(&mut self, fac_table: &[u16]) -> u32 {
         let next_value = self.div_sum as u32;
         let new_d = fac_table[self.div_sum];
 
@@ -226,25 +232,27 @@ impl State {
         self.window[head] = next_value;
         self.div_counts[head] = new_d;
 
-        let prev_bitset = self.tau_set_bitset;
-        // Update tau_counts and bitset
-        if (old_d as usize) < 256 {
-            self.tau_counts[old_d as usize] -= 1;
-            if self.tau_counts[old_d as usize] == 0 {
-                self.tau_set_bitset[old_d as usize / 64] &= !(1 << (old_d as usize % 64));
+        if TRACK_LOCK_IN {
+            let prev_bitset = self.tau_set_bitset;
+            // Update tau_counts and bitset
+            if (old_d as usize) < 256 {
+                self.tau_counts[old_d as usize] -= 1;
+                if self.tau_counts[old_d as usize] == 0 {
+                    self.tau_set_bitset[old_d as usize / 64] &= !(1 << (old_d as usize % 64));
+                }
             }
-        }
-        if (new_d as usize) < 256 {
-            if self.tau_counts[new_d as usize] == 0 {
-                self.tau_set_bitset[new_d as usize / 64] |= 1 << (new_d as usize % 64);
+            if (new_d as usize) < 256 {
+                if self.tau_counts[new_d as usize] == 0 {
+                    self.tau_set_bitset[new_d as usize / 64] |= 1 << (new_d as usize % 64);
+                }
+                self.tau_counts[new_d as usize] += 1;
             }
-            self.tau_counts[new_d as usize] += 1;
-        }
 
-        if self.tau_set_bitset == prev_bitset {
-            self.tau_set_stable_steps += 1;
-        } else {
-            self.tau_set_stable_steps = 0;
+            if self.tau_set_bitset == prev_bitset {
+                self.tau_set_stable_steps += 1;
+            } else {
+                self.tau_set_stable_steps = 0;
+            }
         }
 
         let new_head = head + 1;
@@ -300,7 +308,7 @@ impl State {
 // them — some m produce cycles of 10^7+ terms where materialising the period would blow out
 // memory.
 pub fn r(m: usize, max_length: usize, fac_table: Arc<Vec<u16>>) -> RResult {
-    r_with_progress(m, max_length, fac_table, 0, |_| {})
+    r_with_progress(m, max_length, fac_table, 0, false, |_| {})
 }
 
 // Progress event emitted from `r_with_progress` during long trials, so callers can
@@ -326,11 +334,15 @@ pub enum ProgressPhase {
 // until a cycle is detected — the bounded-orbit proof guarantees termination). The CLI
 // defaults to `usize::MAX` after the u16-truncation fix; a finite cap is now only
 // useful for tests that intentionally exercise the timeout branch.
+//
+// `track_lock_in` enables the lock-in metric (`steps_to_lock_in`); it costs ~1.9× on
+// the hot loop, so leave it off unless the metric is actually wanted (CLI `--lock-in`).
 pub fn r_with_progress<F>(
     m: usize,
     max_length: usize,
     fac_table: Arc<Vec<u16>>,
     progress_interval: usize,
+    track_lock_in: bool,
     on_progress: F,
 ) -> RResult
 where
@@ -339,14 +351,25 @@ where
     if m == 0 {
         return timed_out(0);
     }
-    r_inner(
-        m,
-        State::initial(m),
-        max_length,
-        fac_table,
-        progress_interval,
-        on_progress,
-    )
+    if track_lock_in {
+        r_inner::<true, F>(
+            m,
+            State::initial(m),
+            max_length,
+            fac_table,
+            progress_interval,
+            on_progress,
+        )
+    } else {
+        r_inner::<false, F>(
+            m,
+            State::initial(m),
+            max_length,
+            fac_table,
+            progress_interval,
+            on_progress,
+        )
+    }
 }
 
 // Like `r_with_progress` but starts from an arbitrary seed window instead of all 1s.
@@ -358,6 +381,7 @@ pub fn r_seeded_with_progress<F>(
     max_length: usize,
     fac_table: Arc<Vec<u16>>,
     progress_interval: usize,
+    track_lock_in: bool,
     on_progress: F,
 ) -> RResult
 where
@@ -367,12 +391,18 @@ where
         return timed_out(0);
     }
     let state = State::from_window(m, seed, &fac_table);
-    r_inner(m, state, max_length, fac_table, progress_interval, on_progress)
+    if track_lock_in {
+        r_inner::<true, F>(m, state, max_length, fac_table, progress_interval, on_progress)
+    } else {
+        r_inner::<false, F>(m, state, max_length, fac_table, progress_interval, on_progress)
+    }
 }
 
 // Inner Brent loop, parameterised over the starting state. Both the seed=ones path
 // (`r_with_progress`) and the seeded path (`r_seeded_with_progress`) flow through here.
-fn r_inner<F>(
+// Monomorphized over `TRACK_LOCK_IN` so the no-metric variant carries zero per-step
+// bookkeeping (see `State::step`).
+fn r_inner<const TRACK_LOCK_IN: bool, F>(
     m: usize,
     initial_state: State,
     max_length: usize,
@@ -408,7 +438,7 @@ where
     // steps = 10¹⁰), so memory is negligible.
     let mut snapshots: Vec<(usize, State)> = Vec::with_capacity(40);
     snapshots.push((0, state.clone()));
-    let v = state.step(&fac_table);
+    let v = state.step::<TRACK_LOCK_IN>(&fac_table);
     if v > max_value {
         max_value = v;
     }
@@ -416,7 +446,7 @@ where
 
     let mut power: usize = 1;
     let mut lam: usize = 1;
-    let mut lock_in_step: Option<usize> = if state.tau_set_stable_steps >= 2 * m {
+    let mut lock_in_step: Option<usize> = if TRACK_LOCK_IN && state.tau_set_stable_steps >= 2 * m {
         Some(steps + 1 - 2 * m)
     } else {
         None
@@ -459,17 +489,19 @@ where
             lam = 0;
         }
 
-        let v = state.step(&fac_table);
+        let v = state.step::<TRACK_LOCK_IN>(&fac_table);
         if v > max_value {
             max_value = v;
         }
 
-        if state.tau_set_stable_steps >= 2 * m {
-            if lock_in_step.is_none() {
-                lock_in_step = Some(steps + 1 - 2 * m);
+        if TRACK_LOCK_IN {
+            if state.tau_set_stable_steps >= 2 * m {
+                if lock_in_step.is_none() {
+                    lock_in_step = Some(steps + 1 - 2 * m);
+                }
+            } else {
+                lock_in_step = None;
             }
-        } else {
-            lock_in_step = None;
         }
 
         steps += 1;
@@ -529,6 +561,42 @@ pub fn r_resumable<F>(
     max_length: usize,
     fac_table: Arc<Vec<u16>>,
     progress_interval: usize,
+    track_lock_in: bool,
+    on_progress: F,
+    checkpoint_path: &Path,
+    checkpoint_interval_steps: usize,
+) -> Result<RResult, CheckpointError>
+where
+    F: FnMut(Progress),
+{
+    if track_lock_in {
+        r_resumable_inner::<true, F>(
+            m,
+            max_length,
+            fac_table,
+            progress_interval,
+            on_progress,
+            checkpoint_path,
+            checkpoint_interval_steps,
+        )
+    } else {
+        r_resumable_inner::<false, F>(
+            m,
+            max_length,
+            fac_table,
+            progress_interval,
+            on_progress,
+            checkpoint_path,
+            checkpoint_interval_steps,
+        )
+    }
+}
+
+fn r_resumable_inner<const TRACK_LOCK_IN: bool, F>(
+    m: usize,
+    max_length: usize,
+    fac_table: Arc<Vec<u16>>,
+    progress_interval: usize,
     mut on_progress: F,
     checkpoint_path: &Path,
     checkpoint_interval_steps: usize,
@@ -565,9 +633,9 @@ where
             let mut state = State::initial(m);
             let mut snapshots: Vec<(usize, State)> = Vec::with_capacity(40);
             snapshots.push((0, state.clone()));
-            let v = state.step(&fac_table);
+            let v = state.step::<TRACK_LOCK_IN>(&fac_table);
             let max_value = v.max(1);
-            let lock_in_step = if state.tau_set_stable_steps >= 2 * m {
+            let lock_in_step = if TRACK_LOCK_IN && state.tau_set_stable_steps >= 2 * m {
                 Some(1 + 1 - 2 * m)
             } else {
                 None
@@ -629,17 +697,19 @@ where
             lam = 0;
         }
 
-        let v = state.step(&fac_table);
+        let v = state.step::<TRACK_LOCK_IN>(&fac_table);
         if v > max_value {
             max_value = v;
         }
 
-        if state.tau_set_stable_steps >= 2 * m {
-            if lock_in_step.is_none() {
-                lock_in_step = Some(steps + 1 - 2 * m);
+        if TRACK_LOCK_IN {
+            if state.tau_set_stable_steps >= 2 * m {
+                if lock_in_step.is_none() {
+                    lock_in_step = Some(steps + 1 - 2 * m);
+                }
+            } else {
+                lock_in_step = None;
             }
-        } else {
-            lock_in_step = None;
         }
 
         steps += 1;
@@ -701,7 +771,7 @@ where
         for (s, st) in snapshots.iter().rev() {
             let mut advanced = st.clone();
             for _ in 0..lam {
-                advanced.step(fac_table);
+                advanced.step::<false>(fac_table);
             }
             if !advanced.window_eq(st) {
                 chosen = Some((*s, st));
@@ -719,14 +789,14 @@ where
     let mut tortoise = start_state;
     let mut hare = tortoise.clone();
     for _ in 0..lam {
-        hare.step(fac_table);
+        hare.step::<false>(fac_table);
     }
     let mut mu: usize = start_step;
     let mut next_progress = detection_step.saturating_add(progress_interval);
     let mut virtual_step = detection_step;
     while !tortoise.window_eq(&hare) {
-        tortoise.step(fac_table);
-        hare.step(fac_table);
+        tortoise.step::<false>(fac_table);
+        hare.step::<false>(fac_table);
         mu += 1;
         virtual_step = virtual_step.saturating_add(2); // tortoise + hare each took one step
         if virtual_step >= next_progress {
@@ -759,13 +829,13 @@ struct CycleStats {
 // HashMap is essentially free — `summarize_cycle` allocated it anyway.
 fn summarize_cycle(mut state: State, lam: usize, fac_table: &[u16]) -> (CycleStats, HashMap<u32, u64>) {
     assert!(lam >= 1, "cycle must have positive length");
-    let first = state.step(fac_table);
+    let first = state.step::<false>(fac_table);
     let mut counts: HashMap<u32, u64> = HashMap::new();
     counts.insert(first, 1);
     let mut max = first;
     let mut min = first;
     for _ in 1..lam {
-        let v = state.step(fac_table);
+        let v = state.step::<false>(fac_table);
         *counts.entry(v).or_insert(0) += 1;
         if v > max {
             max = v;
