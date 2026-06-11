@@ -140,7 +140,7 @@ Used consistently throughout this document:
 4. The conservation law `mean_v = m · mean_τ`
 5. Length-(m+1) cycles and the invariant `x + τ(x) = K`
 6. The 8m envelope
-7. Fixed points — the full catalogue
+7. Fixed points — catalogue and reachability
 8. The sustained ceiling M*(m) and the four-band picture
 9. The attractor catalogue (and the `(2m−199)(m+1)` harmonic family)
 10. Wide-band outliers and runaway cycles
@@ -1028,60 +1028,62 @@ if basin_path.exists():
 
 md(
     r"""
-## 7. Fixed points — the full catalogue
+## 7. Fixed points — catalogue and reachability
 
-A fixed point (cycle of length 1) is a value the window can hold forever:
-all m entries equal x, and the next term is $m \cdot \tau(x) = x$. So fixed
-points are exactly the integer solutions of
+A **fixed point** is a cycle of length 1: a value the window can hold
+forever. If all m window entries equal x, the next term is $m \cdot \tau(x)$,
+so x is a fixed point iff
 
 $$x = m \cdot \tau(x), \qquad\text{equivalently } \tau(qm) = q
 \text{ with } q = x/m.$$
 
-### Per-quotient families
+The quotient $q = x/m = \tau(x)$ is the key parameter throughout this
+section: by the conservation law of §4 (`mean_v = m · mean_τ` over any
+cycle), q is the mean τ-value the dynamics must sustain, indefinitely, to
+sit at x.
 
-Multiplicativity of τ turns each quotient q into a condition on the
-prime-factor shape of m. The families are broader than a prime-only
-analysis suggests — testing only m ∈ {prime, p², pq} misses most of them:
+### 7.1 The catalogue: existence is the norm
 
-| q | condition on m | examples |
+Multiplicativity of τ turns τ(qm) = q into a condition on the prime-factor
+shape of m, one family per quotient. The complete list for q ≤ 12
+(verified by exhaustive sieve for m ≤ 5000):
+
+| q | m solving τ(qm) = q | fixed point x |
 |---|---|---|
-| 1 | m = 1 | x = 1 |
-| 3 | 3m = p² ⇒ m = 3 only | x = 9 (not reached by seed=1) |
-| 8 | m an odd prime | x = 8m: m = 127, 167, 211, 613, 733, 1103, 1117, 1291 all observed |
-| 12 | m a prime > 3, **and also m ∈ {6, 8, 9}** | x = 72, 96, 108 at the composite m's |
-| 16 | **m = 8p (p odd prime) or m = 2¹¹** | x = 384 (m=24), x = 640 (m=40), x = 32768 (m=2048) |
-| 24 | m = p² (p odd ≠ 3), **and also m ∈ {3p, 4p, 36, 256}** | x = 600 (m=25), x = 360 (m=15), x = 480 (m=20), … |
+| 1 | m = 1 | 1 |
+| 2 | m = 1 | 2 |
+| 3 | m = 3 | 9 |
+| 4 | m = 2 | 8 |
+| 5 | m = 125 | 625 = 5⁴ |
+| 6 | m ∈ {2, 3} | 12, 18 |
+| 8 | m an odd prime, and m = 16 | 8m = 2³·p, and 128 = 2⁷ |
+| 9 | m = p² (p prime ≠ 3), and m = 729 | 9m (always a perfect square) |
+| 10 | m ∈ {8, 125} | 80, 1250 |
+| 12 | every prime m > 3, and composites m ∈ {6, 8, 9, …} | 12m = 2²·3·p, … |
 
-### Fixed points are near-universal
+Larger quotients have progressively richer (mostly composite) families:
+q = 16 needs m = 8p or m = 2¹¹, q = 24 needs m = p² (p odd ≠ 3) or
+m ∈ {3p, 4p, 36, 256}, and so on.
 
-Sieving $x = m\,\tau(x)$ exhaustively for $x \le M^*(1549) = 277{,}200$
-(complete for m ≤ 1549; catalogue `analysis/fixed_points_full.csv` extends
-to m ≤ 2100):
+Sieving $x = m\,\tau(x)$ exhaustively over $x \le 277{,}200$
+(`analysis/fixed_points_full.csv`; complete for m ≤ 1549 — beyond
+m ≈ 1800 the x-bound starts dropping high-q points):
 
 - **~91% of m ≤ 1549 have at least one fixed point** (789 m's have exactly
-  one, 557 have two, 65 have three).
-- **Every 8m-prime has a second, unvisited fixed point at 12m**
-  (τ(2²·3·p) = 12): m=127 has {1016, 1524}, m=1291 has {10328, 15492}, ….
-  So "every prime m > 3 has a length-1 cycle" is structurally trivial —
-  every such prime has *two*. The open question was never existence, only
-  reachability.
-- **Seed=1, when it lands on a fixed point at all (9 of ~1411 m's that
-  have one), always lands on the smallest.**
+  one, 557 have two, 65 have three). Every prime m > 3 has at least two,
+  8m and 12m.
 - The ~138 m's with *no* fixed point skew τ-rich (multiples of 9, 16, 64:
   18, 27, 30, 45, 63, 64, 72, …) — a divisibility obstruction that looks
   characterisable (§12).
-- Phase-D prediction: **m = 2048 has fixed points {32768, 53248, 57344}**
-  (q = 16, 26, 28) — a concrete target when the scan extends past 2000.
 
-### Reachability
-
-Existence ≠ observation: the dynamics almost never *selects* a fixed
-point (9 of ~1411). The random-seed basin scan (§11) found the first
-direct evidence that unvisited fixed points are reachable at all: at
-m=103 and m=179, 1/200 random seeds land on x = 8m even though seed=1
-resolves to a multi-element cycle. The interesting question is why the
-selection probability is so small — and whether the basin of a fixed
-point is ever more than the point itself plus a thin shell (§12).
+So existence needs no explanation; what does is the opposite observation.
+The dynamics almost never *ends* on a fixed point, and the landings it
+does make follow a strict pattern: seed=1 reaches a fixed point at only
+9 m's in the whole scan (m = 1 and the eight primes 127, 167, 211, 613,
+733, 1103, 1117, 1291, always at x = 8m), and random seeds (§11) only
+ever land on x = 8m at odd primes, x = 8 at m = 2, and x = 9 at m = 3.
+Two questions, answered in 7.2–7.4: why only primes — even from random
+seeds — and why always the smallest of the available fixed points?
 """
 )
 
@@ -1106,16 +1108,33 @@ landed = pd.DataFrame(rows, columns=['m', 'landed_x', 'available_x', 'is_smalles
 print('\\nseed=1 fixed-point landings (is_smallest should be True throughout):')
 print(landed.to_string(index=False))
 
+# Random-seed landings (basin scan §11 + targeted composite probe), for the figure.
+rand_land = set()
+for pth in [ANA / 'random_seed_basin.csv', ANA / 'composite_fp_probe_raw.csv']:
+    if pth.exists():
+        t = pd.read_csv(pth, low_memory=False)
+        t = t[(t.timed_out == 0) & (t.cycle_length == 1)]
+        rand_land |= set(zip(t.m.astype(int), t.cycle_min.astype(int)))
+
 fig, axes = plt.subplots(1, 2, figsize=(14, 5), gridspec_kw={'width_ratios': [3, 1]})
 ax = axes[0]
 cmap = plt.get_cmap('tab10')
 for i, q in enumerate(sorted(fpc.q.unique())):
     sub = fpc[fpc.q == q]
     ax.scatter(sub.m, sub.x / sub.m, s=10, alpha=0.6, color=cmap(i % 10), label=f'q = {q} (n={len(sub)})')
+if rand_land:
+    rl_m = [m_ for m_, _ in rand_land]
+    rl_q = [x_ / m_ for m_, x_ in rand_land]
+    ax.scatter(rl_m, rl_q, s=90, facecolors='none', edgecolors='deepskyblue',
+               lw=1.4, zorder=4, label='visited by random seeds')
 ax.scatter(seed1_fp[seed1_fp.m > 1].m, seed1_fp[seed1_fp.m > 1].cycle_min / seed1_fp[seed1_fp.m > 1].m,
            s=120, marker='*', c='gold', edgecolor='black', lw=0.6, zorder=5, label='visited by seed=1')
+ax.axhline(9.26, ls='--', color='gray', lw=1.2)
+ax.text(M_COMPLETE * 0.99, 9.6, 'sustained-τ ceiling K/m ≈ 9.26 (§5)',
+        ha='right', fontsize=8, color='gray')
 ax.set_xlabel('m'); ax.set_ylabel('x / m  (= τ(x) = q)')
-ax.set_title(f'All fixed points x = m·τ(x), m ≤ {M_COMPLETE} — seed=1 visits only the gold stars')
+ax.set_title(f'All fixed points x = m·τ(x), m ≤ {M_COMPLETE} — only points below the '
+             'ceiling are ever visited')
 ax.legend(fontsize=7, ncol=2); ax.grid(alpha=0.3)
 
 ax = axes[1]
@@ -1127,6 +1146,254 @@ ax.set_xlabel('fixed points per m'); ax.set_ylabel("number of m's")
 ax.set_title('Fixed-point multiplicity')
 ax.grid(alpha=0.3, axis='y')
 plt.tight_layout(); plt.show()
+"""
+)
+
+md(
+    r"""
+### 7.2 An exact reachability criterion
+
+The basin of a fixed point has a clean characterisation in terms of the
+**τ-stream**, the sequence $n \mapsto \tau(a_n)$:
+
+> **The orbit reaches the fixed point x = mq if and only if it ever
+> produces m consecutive terms whose τ-values all equal q.**
+
+*Proof.* (⇐) If $\tau(a_{j+1}) = \dots = \tau(a_{j+m}) = q$, the next term
+is the window's τ-sum, $mq = x$. Since $\tau(x) = q$, the window again
+holds m terms of τ-value q, so every later term is x. (⇒) Once fixed at
+x, the last m terms all equal x and $\tau(x) = q$. ∎
+
+The collapse direction is the useful one: the m terms that trigger
+fixation do **not** need to equal x — any m consecutive terms with the
+right τ-values lock the orbit (code cell below: a window of sixteen
+*distinct* τ=8 values jumps straight to 128 = 16·8 and never leaves).
+Reachability is therefore a question about **runs in the τ-stream**, and
+two properties of that stream act as gates:
+
+1. **Parity gate.** τ(v) is odd iff v is a perfect square, so an odd-q
+   fixed point needs m consecutive perfect-square terms. With square
+   density falling like $v^{-1/2}$, a run of m of them is hopeless except
+   at the very smallest m. This closes the whole q = 9 family (m = p² —
+   the only composite family near the band at scale) and q = 5
+   (m = 125), and explains why m = 3 (x = 9, q = 3) produces the *only*
+   odd-q landings ever observed (8 of 2,200 random trials — at m = 3 a
+   "run" is just three consecutive squares).
+2. **Sustained-τ gate.** A run of m τ-values equal to q is, while it
+   lasts, a window with mean τ = q — and the sustained mean τ of the
+   dynamics is narrowly banded. Every observed cycle, from seed=1 (§5)
+   or random seeds (§11), keeps K/m ≈ mean_τ within ≈[4.6, 8.7], hard
+   ceiling ≈ 9.26. A fixed point is the degenerate λ = 1 member of §5's
+   hierarchy with invariant K = x + τ(x) = q(m+1), i.e. K/m ≈ q:
+   quotients q ≥ 10 demand a sustained τ above anything the dynamics has
+   ever produced, at any m, from any seed. Note this gates on
+   *sustained* τ, not on the range of values explored — at 7 of the 8
+   seed=1 fixed-point primes the transient peak `max_value` exceeds 12m
+   (`peaks` table in the code cell below), so the orbit does visit values
+   the size of the 12m fixed point; it just never strings m consecutive
+   τ = 12 terms together while there.
+
+Intersecting the two gates with the catalogue of 7.1: **the realisable
+quotients are the even q ≤ 8**, and the m's owning such a fixed point are
+
+| q | m | x |
+|---|---|---|
+| 4 | 2 | 8 |
+| 6 | 2, 3 | 12, 18 |
+| 8 | odd primes | 8m |
+| 8 | 16 | 128 |
+
+For m > 16 this set is exactly the odd primes. The prime-only pattern in
+the data is bookkeeping on the divisor count of 8m, not an arithmetic
+preference of the dynamics: τ(2³·m) = 8 forces m to be an odd prime (or
+2⁴), and no other shape of m places a fixed point inside the sustained-τ
+band.
+"""
+)
+
+code(
+    """
+# The reachability criterion in action.
+# Plain divisor-count sieve; every value in these demos stays far below the bound.
+N_SIEVE = 100_000
+tau = np.zeros(N_SIEVE + 1, dtype=np.int32)
+for d in range(1, N_SIEVE + 1):
+    tau[d::d] += 1
+
+# 1. Collapse: a window of sixteen DISTINCT τ=8 values locks m=16 onto x=128.
+w = [24, 30, 40, 54, 56, 88, 104, 105, 110, 135, 136, 152, 170, 184, 189, 190]
+assert all(tau[v] == 8 for v in w) and len(set(w)) == 16
+out = []
+for _ in range(20):
+    nxt = int(sum(tau[v] for v in w))
+    out.append(nxt)
+    w = w[1:] + [nxt]
+print('m=16, window of distinct τ=8 values → next 20 terms:', out)
+
+# 2. Transient range is not the gate: seed=1 visits 12m-sized values at most
+#    realised primes, yet never fixes on the (q=12) point 12m.
+peaks = seed1_fp[seed1_fp.m > 1][['m', 'max_value']].astype(int).copy()
+peaks['twelve_m'] = 12 * peaks.m
+peaks['transient_exceeds_12m'] = peaks.max_value > peaks.twelve_m
+print('\\nseed=1 transient peak vs the unvisited 12m fixed point:')
+print(peaks.to_string(index=False))
+
+# 3. Nucleation transcript: run LogNormal random seeds at m=23 until one lands
+#    on x = 8·23 = 184, then print the τ-stream around the moment of fixation.
+def run_trial(m, rng, max_steps=100_000):
+    mu = math.log(m * math.log(m))
+    w = [max(1, round(v)) for v in rng.lognormal(mu, 0.71, size=m)]
+    terms = list(w)
+    seen = set()
+    for _ in range(max_steps):
+        nxt = int(sum(tau[v] for v in w))
+        terms.append(nxt)
+        w = w[1:] + [nxt]
+        key = tuple(w)
+        if key in seen:
+            return terms, w
+        seen.add(key)
+    return terms, w
+
+rng = np.random.default_rng(1)
+m_demo = 23
+for trial in range(500):
+    terms, w = run_trial(m_demo, rng)
+    if w == [184] * m_demo:
+        ts = np.array(terms)
+        run = np.convolve((tau[ts] == 8).astype(int), np.ones(m_demo, int), 'valid')
+        j = int(np.argmax(run == m_demo))  # start of the first all-τ=8 run
+        print(f'\\ntrial {trial}: landed on x=184; first all-τ=8 run is terms '
+              f'{j}..{j + m_demo - 1} of {len(ts)}')
+        print('value:τ around nucleation — fixation is the last defect leaving the window:')
+        print('  ' + ' '.join(f'{v}:{tau[v]}' for v in ts[max(0, j - 12):j + m_demo + 3]))
+        break
+else:
+    print('no landing within 500 trials (unexpected for rng seed 1)')
+"""
+)
+
+md(
+    r"""
+### 7.3 Reachability in the data
+
+Three datasets bear on which catalogued fixed points are actually
+reached: the seed=1 scan (m ≤ 1788), the §11 random-seed basin scan
+(711 m's, ~200 LogNormal trials each), and a targeted probe of 2,000
+extra trials at each small composite owning a low-q fixed point
+(`analysis/composite_fp_probe_raw.csv`, from `divisor_series basin-scan
+--m-list 2,3,4,8,16,25,49,125 --trials 2000 --sigma 0.71 --rng-seed 7`).
+Every landing across all three:
+
+- **seed=1**: m = 1, plus 8 of the 255 odd primes scanned (≈3%), always
+  at x = 8m.
+- **Random seeds, odd primes**: 23 of 115 sampled odd primes record at
+  least one landing on x = 8m, with wildly varying basin mass — from
+  1/200 (m = 103, 137, 179, 727, …) through 89/200 (m = 59) up to
+  151/199 (m = 613). The eight seed=1 primes are simply those whose 8m
+  basin is fat enough for the all-ones corner of seed space to fall in.
+- **Random seeds, small m**: m = 2 lands on x = 8 (q = 4) in 164/2,200
+  trials and never on its second candidate x = 12 (q = 6); m = 3 lands
+  on x = 9 (q = 3, the parity-gate boundary case) in 8/2,200 and never
+  on 18 or 24.
+- **Random seeds, composites**: zero landings at every sampled composite
+  — the whole q = 9 square family (4, 25, 49, 121, 169, 289, 361, 529,
+  841, 961) and the q = 10 pair (8, 125) as the gates predict, and also
+  0/2,200 at m = 16, the one composite whose fixed point (x = 128,
+  q = 8) passes both gates. Whether m = 16's basin is empty or merely
+  thin is open (§12); for calibration, 92 of the 115 sampled odd primes
+  also recorded 0/200.
+
+In total: 9 seed=1 landings and 790 random-seed landings, every one on
+the smallest fixed point of its m (verified in the cell below).
+
+The nucleation transcript above (m = 23, x = 184) shows a landing as it
+happens: the orbit hovers just below 8m with τ-values mostly 8 and
+isolated defects (188 → τ = 6, 176 → τ = 10), and fixation is exactly
+the moment the last defect leaves the window — m consecutive τ = 8
+terms, none of which needs to equal 184. This is §12's lock-in-as-
+nucleation picture in its sharpest form, and it suggests what should
+distinguish fat-basin primes: a τ=8-rich neighbourhood just below 8m
+gives defects fewer places to enter. The local density of τ = 8 values
+near 8m does correlate positively with basin hit-rate, but weakly
+(Spearman ρ ≈ 0.26 over the sampled primes); most of the 0/200 vs
+151/199 spread remains unexplained (§12).
+
+### 7.4 Why always the smallest
+
+Fixed points of a given m are ordered by their quotient (x = qm), and
+the gates select from the bottom. For every m ≥ 4 the catalogue contains
+*at most one* fixed point with q ≤ 9 — the q = 8 family (odd primes,
+16), the q = 9 family (squares) and q = 5 (m = 125) live on disjoint
+m-sets — so wherever a fixed point is reachable at all, it is
+automatically the smallest one; every competitor has q ≥ 10 and is gated
+out. "Lands on the smallest" is a corollary of the sustained-τ gate, not
+a separate selection rule. The only m with several gate-passing
+candidates are m = 2 ({8, 12}) and m = 3 ({9, 18, 24}): in 2,200 trials
+each, the lowest quotient won every time, consistent with the
+equilibrium τ at tiny m sitting near 3–4, well below q = 6.
+
+### 7.5 Predictions
+
+- **m = 2048** has three catalogued fixed points {32768, 53248, 57344}
+  (q = 16, 26, 28) — all far above the sustained-τ ceiling, so the scan
+  extension past m = 2000 should find a multi-element cycle there
+  despite the unusually rich catalogue. A λ = 1 result at m = 2048 would
+  falsify the sustained-τ gate.
+- Every odd prime in the long tail keeps a realisable x = 8m point, so
+  λ = 1 trials should keep appearing — and only at primes (m = 16 being
+  the lone composite candidate left in range).
+"""
+)
+
+code(
+    """
+# Observed fixed-point landings across both random-seed datasets, checked
+# against the catalogue: every landing is on the smallest fixed point of its m.
+def _is_prime(n):
+    return n > 1 and all(n % d for d in range(2, int(n ** 0.5) + 1))
+
+frames = []
+for pth in [ANA / 'random_seed_basin.csv', ANA / 'composite_fp_probe_raw.csv']:
+    if pth.exists():
+        t = pd.read_csv(pth, low_memory=False)
+        frames.append(t[t.timed_out == 0][['m', 'cycle_length', 'cycle_min']])
+trials = pd.concat(frames, ignore_index=True)
+trials['m'] = trials.m.astype(int)
+tot = trials.groupby('m').size()
+
+land = trials[trials.cycle_length == 1].copy()
+land['x'] = land.cycle_min.astype(int)
+per = (land.groupby(['m', 'x']).size().rename('landings').reset_index()
+           .join(tot.rename('trials'), on='m'))
+per['q'] = per.x // per.m
+per['m_prime'] = per.m.map(_is_prime)
+smallest = fpf.groupby('m').x.min()
+per['is_smallest_fp'] = per.x.values == smallest.reindex(per.m).values
+print(f'random-seed fixed-point landings: {int(per.landings.sum())} across '
+      f'{len(per)} m\\'s — all on the smallest fixed point: {bool(per.is_smallest_fp.all())}')
+print(per.sort_values('landings', ascending=False).to_string(index=False))
+
+# Composites whose smallest fixed point has q ≤ 10 (the in-band candidates):
+# sampled heavily, zero landings everywhere.
+inband_comp = sorted(m_ for m_ in set(fpf[fpf.q <= 10].m) & set(tot.index)
+                     if m_ > 3 and not _is_prime(m_))
+print('\\nsampled composites with a q ≤ 10 fixed point (all zero landings):')
+print(pd.DataFrame({'m': inband_comp,
+                    'trials': [int(tot[m_]) for m_ in inband_comp],
+                    'landings': [int(per[per.m == m_].landings.sum()) for m_ in inband_comp]}
+                   ).to_string(index=False))
+
+# Basin mass at 8m vs local τ=8 density around 8m: positive but weak.
+odd_primes = sorted(m_ for m_ in tot.index
+                    if m_ >= 3 and _is_prime(m_) and 8 * m_ + 20 <= N_SIEVE)
+hits8 = land[land.x == 8 * land.m].groupby('m').size()
+rate = [hits8.get(m_, 0) / tot[m_] for m_ in odd_primes]
+dens = [float((tau[8 * m_ - 20: 8 * m_ + 21] == 8).mean()) for m_ in odd_primes]
+rho = float(np.corrcoef(pd.Series(rate).rank(), pd.Series(dens).rank())[0, 1])
+print(f'\\nodd primes sampled: {len(odd_primes)}; with ≥1 landing on 8m: '
+      f'{sum(r > 0 for r in rate)}')
+print(f'Spearman(hit rate, τ=8 density in 8m±20) = {rho:.2f}')
 """
 )
 
@@ -1575,11 +1842,11 @@ md(
 Everything above is built from one deterministic trajectory per m
 (seed = all-ones window). The basin scan
 (`analysis/build_random_seed_basin.py` → `analysis/random_seed_basin.csv`)
-maps the wider attractor landscape: T = 200 trials per m across 106 m's,
-each trial's window seeded by m independent draws from
-`round(LogNormal(ln(m·ln m), 0.71))` — centred on the cycle band, with a
-central-95% factor-16 spread. (T is the trial count per m — unrelated to
-the cycle invariant K of §5.)
+maps the wider attractor landscape: T = 200 trials per m across 711 m's
+(the original 106-m plan plus later extensions), each trial's window
+seeded by m independent draws from `round(LogNormal(ln(m·ln m), 0.71))`
+— centred on the cycle band, with a central-95% factor-16 spread. (T is
+the trial count per m — unrelated to the cycle invariant K of §5.)
 
 ### Headline findings
 
@@ -1601,16 +1868,17 @@ the cycle invariant K of §5.)
   admissible minimum K/m ≈ 2 is never reached. The floor and ceiling are
   properties of the dynamics over a wide seed class — but not of the
   admissibility structure (§5).
-- **Fixed-point reachability** (§7): the known 8m fixed-point primes are
-  hit frequently by random seeds (15–151 of 200 trials); for primes whose
-  seed=1 misses the fixed point, m=103 and m=179 each landed 1/200 trials
-  on x = 8m — first direct evidence that the unvisited fixed points are
-  reachable, with basin measure ~5·10⁻³ at this σ. Other sampled primes
-  recorded zero hits at T = 200.
+- **Fixed-point reachability** (§7): 23 of the 115 sampled odd primes
+  land on x = 8m at least once, with basin mass ranging from 1/200
+  (m = 103, 137, 179, 727, …) to 151/199 (m = 613) — including 17 primes
+  whose seed=1 trajectory misses the fixed point. m = 2 lands on x = 8
+  and m = 3 on x = 9; no composite m has ever landed on a fixed point.
+  §7 develops the full reachability picture (run criterion, parity and
+  sustained-τ gates).
 
 ### Caveats
 
-Residual timeouts (12.9%) cluster on large-m runaway-cycle trials; the
+Residual timeouts (1.4% of rows) cluster on large-m runaway-cycle trials; the
 pre-2026-05-06 u16 value clamp affected some early `max_value` records
 (fixed — window is u32 now; affected rows flagged for re-run). σ = 0.71
 is a single point in seed-distribution space: the floor/ceiling
@@ -1756,7 +2024,9 @@ md(
   μ ~ 1/P(nucleation per step). Measure window "purity" backwards from
   lock-in for a few dozen m's; a mean-field nucleation model could
   *predict* the μ ~ m^5.3 exponent and identify runaway m's in advance —
-  i.e. how to size the next scan phase without running it.
+  i.e. how to size the next scan phase without running it. §7.3's
+  fixation transcript (defects leaving a τ=8-entrained window one by
+  one) is this mechanism observed directly at the λ = 1 endpoint.
 - **The ~138 fixed-point-free m's** skew τ-rich (multiples of 9, 16,
   64…). `m | x ∧ τ(x) = x/m` failing for all x ≤ M*(m) is a divisibility
   obstruction that looks characterisable — a clean standalone lemma.
@@ -1796,22 +2066,26 @@ md(
 
 ### New scans / Rust
 
-- **Basin probes re-aimed at the full fixed-point catalogue.** With
-  `fixed_points_full.csv` in hand, probe flat-window seeds at *all* fixed
-  points of a sample of m's (composites included, and the 12m second
-  points of the 8m primes). Is a fixed point's basin ever more than the
-  point plus a thin shell? Do the 65 m's with three fixed points behave
-  differently? Why does seed=1 reach a fixed point for only 9 of ~1411
-  m's that have one — and always the smallest?
+- **Fixed-point basin-width asymmetry.** *Which* fixed points are
+  reachable is settled (§7: even q ≤ 8, via the τ-run criterion), but
+  the basin mass at x = 8m spans 0/200 to 151/199 across sampled odd
+  primes, and local τ=8 density near 8m explains only a little of it
+  (Spearman ρ ≈ 0.26). What controls it? A nucleation model of the τ=8
+  run (lock-in item above) is the natural candidate.
+- **m = 16 (x = 128, q = 8)** — the only composite fixed point passing
+  both §7 gates: 0 landings in 2,200 random trials so far. Empty basin
+  or merely thin? m=16 trials are cheap; deep sampling plus a σ-sweep
+  would decide, and the same sweep applied to thin-basin primes
+  (m = 103, 137, 179, 727 sit at 1/200) tests whether hits grow
+  systematically with σ.
 - **Low-seed basin scan** (e.g. `LogNormal(ln 2m, 0.5)`): can *any* seed
   reach the admissible small-K cycles (K/m ≈ 2)? This is the open
   falsifier for the 4m floor.
-- **σ-sweep** at the m's with 1/200 fixed-point hits (m=103, 179): if the
-  8m basin is thin, hits should grow systematically with σ.
-- **Long tail past m=1788** (and the m=2048 three-fixed-point target),
-  with checkpointing and a sidecar config for reproducibility; size
-  `--max-steps` via the hitting-time regression first. Brent needs ~2×
-  `repeat_after` steps to fire.
+- **Long tail past m=1788**, with checkpointing and a sidecar config for
+  reproducibility; size `--max-steps` via the hitting-time regression
+  first. Brent needs ~2× `repeat_after` steps to fire. m = 2048 is the
+  marquee target: §7.5 predicts its three catalogued fixed points
+  (q = 16, 26, 28) are all gated out.
 - **E.2/E.3 ceilings**: define `M_typ(m)` as the solution of `M = m·ln M`
   and quantify the slack band `[M_typ, M*]`; per-m `max_value/M*(m)`
   ("closest approach" — is it correlated with the wide-band outliers?).
